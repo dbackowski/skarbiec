@@ -1,5 +1,7 @@
 # Skarbiec
 
+[![Testy](https://github.com/dbackowski/skarbiec/actions/workflows/testy.yml/badge.svg)](https://github.com/dbackowski/skarbiec/actions/workflows/testy.yml)
+
 Desktopowa aplikacja do śledzenia domowego majątku: ETF-y i akcje (konto zwykłe, IKE, IKZE),
 obligacje skarbowe ROR i konta oszczędnościowe. Wartości są przeliczane na PLN i zebrane na jednym
 dashboardzie. Historię z XTB można zaimportować bezpośrednio z raportu xStation.
@@ -69,6 +71,9 @@ npm run test:all       # jedno i drugie
   Generuje je `python3 test/fixtures/make_xtb_fixtures.py`.
 
 Testy interfejsu wymagają zainstalowanej przeglądarki Google Chrome.
+
+Na GitHubie testy uruchamiają się automatycznie przy każdym `push` na `main` i przy każdym pull requeście
+(`.github/workflows/testy.yml`, runner Ubuntu).
 
 ## Import z XTB
 
