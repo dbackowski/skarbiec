@@ -7,9 +7,17 @@ const { invoke } = window.__TAURI__.core;
 const http = window.__TAURI__.http;
 
 let data = { transactions: [], bonds: [], savings: [] };
+// Last fetched market data, also saved in the data file (data.cache) so the app shows the
+// last known values when offline. `at` = ISO time of the fetch.
 let refRates = null; // NBP reference rate history, fetched when there are bonds
-const quotes = {}; // symbol -> { price, currency }
+let refRatesAt = null;
+const quotes = {}; // symbol -> { price, currency, at }
 const fxNow = { PLN: 1 }; // currency -> PLN per unit, today
+const fxAt = {}; // currency -> at
+let refreshedAt = null; // start of the last refresh; older data is shown as cached
+
+const isStale = (at) => !refreshedAt || !at || at < refreshedAt;
+const fmtTime = (at) => new Date(at).toLocaleString("pl-PL", { dateStyle: "short", timeStyle: "short" });
 
 const $ = (sel) => document.querySelector(sel);
 const num = new Intl.NumberFormat("pl-PL", { maximumFractionDigits: 4 });
@@ -56,10 +64,17 @@ async function fetchFx(currency, date) {
 }
 
 // Persist first, then swap in-memory state, so a failed write leaves both consistent.
-async function persist(patch) {
-  const next = { ...data, ...patch };
-  await invoke("save_data", { data: JSON.stringify(next, null, 2) });
-  data = next;
+// Writes are queued and each merges into the latest data, so a background cache save
+// cannot overwrite a transaction saved a moment earlier.
+let saving = Promise.resolve();
+function persist(patch) {
+  const run = saving.then(async () => {
+    const next = { ...data, ...patch };
+    await invoke("save_data", { data: JSON.stringify(next, null, 2) });
+    data = next;
+  });
+  saving = run.catch(() => {});
+  return run;
 }
 
 async function fetchRefRates() {
@@ -118,7 +133,8 @@ function render() {
       cell(ACCOUNTS[p.account]),
       cell(num.format(p.qty)),
       cell(`${money.format(p.cost / p.qty)} ${p.currency}`),
-      cell(q ? money.format(q.price) : dash),
+      Object.assign(cell(q ? `${money.format(q.price)}${isStale(q.at) ? " *" : ""}` : dash),
+                    { title: q?.at ? `Kurs z ${fmtTime(q.at)}` : "" }),
       cell(value != null ? money.format(value) : dash),
       cell(pl != null ? money.format(pl) : dash, sign(pl)),
       cell(pl != null ? `${money.format((pl / p.cost) * 100)}%` : dash, sign(pl)),
@@ -319,21 +335,48 @@ async function addSavings(e) {
 
 async function refresh() {
   const open = positions(data.transactions).filter((p) => p.qty > 1e-9);
+  const currencies = [...new Set([...open, ...data.savings].map((p) => p.currency))].filter((c) => c !== "PLN");
+  const now = new Date().toISOString();
+  refreshedAt = now;
   status("Pobieranie kursów…");
   const errors = [];
   await Promise.all([
     ...open.map((p) => fetchQuote(p.symbol)
-      .then((q) => { quotes[p.symbol] = q; })
+      .then((q) => { quotes[p.symbol] = { ...q, at: now }; })
       .catch((e) => errors.push(e.message))),
-    ...[...new Set([...open, ...data.savings].map((p) => p.currency))].filter((c) => c !== "PLN").map((c) => fetchFx(c, today())
-      .then((r) => { fxNow[c] = r; })
-      .catch((e) => errors.push(`Kurs ${c}: ${e.message}`))),
+    ...currencies.map((c) => fetchFx(c, today())
+      .then((r) => { fxNow[c] = r; fxAt[c] = now; })
+      .catch((e) => errors.push(`Kurs ${c}: ${e.message ?? e}`))),
     data.bonds.length && fetchRefRates()
-      .then((r) => { refRates = r; })
+      .then((r) => { refRates = r; refRatesAt = now; })
       .catch((e) => errors.push(`Stopy NBP: ${e.message ?? e}`)),
   ]);
+
+  // Values still shown from the saved cache because this refresh could not replace them.
+  const cachedAt = [
+    ...open.map((p) => quotes[p.symbol]?.at),
+    ...currencies.map((c) => fxNow[c] && fxAt[c]),
+    data.bonds.length && refRates && refRatesAt,
+  ].filter((at) => at && isStale(at));
   render();
-  status(errors.length ? errors.join(" · ") : `Kursy z ${new Date().toLocaleTimeString("pl-PL")}`, errors.length > 0);
+
+  const total = open.length + currencies.length + (data.bonds.length ? 1 : 0);
+  let msg = !errors.length ? `Kursy z ${new Date().toLocaleTimeString("pl-PL")}`
+    : errors.length === total && total > 1 ? "Brak połączenia, nic nie udało się odświeżyć"
+    : `Nie udało się odświeżyć: ${errors.join(" · ")}`;
+  if (cachedAt.length) msg += `. Pokazuję zapisane dane z ${fmtTime(cachedAt.sort()[0])} (oznaczone *).`;
+  if (errors.length < total) {
+    try {
+      await persist({ cache: {
+        quotes,
+        fx: Object.fromEntries(currencies.filter((c) => fxNow[c]).map((c) => [c, { rate: fxNow[c], at: fxAt[c] }])),
+        refRates: refRates && { rates: refRates, at: refRatesAt },
+      } });
+    } catch (e) {
+      msg += ` Nie udało się zapisać kursów: ${e.message ?? e}`;
+    }
+  }
+  status(msg, errors.length > 0);
 }
 
 let pendingImport = null; // transactions after import, waiting for confirmation
@@ -428,7 +471,7 @@ async function addTransaction(e) {
     const tx = { id: crypto.randomUUID(), account, symbol, side: f.get("side"), date, qty, price, fee, currency: q.currency, fx };
     positions([...data.transactions, tx]); // throws on overselling
     await persist({ transactions: [...data.transactions, tx] });
-    quotes[symbol] = q;
+    quotes[symbol] = { ...q, at: new Date().toISOString() };
     form.reset();
     form.date.value = today();
     form.account.value = account; // keep the account for the next entry
@@ -489,6 +532,10 @@ window.addEventListener("DOMContentLoaded", async () => {
   try {
     data = { transactions: [], bonds: [], savings: [], ...JSON.parse(await invoke("load_data")) };
     for (const t of data.transactions) t.account ??= "regular"; // pre-account data
+    const cache = data.cache ?? {};
+    Object.assign(quotes, cache.quotes);
+    for (const [c, v] of Object.entries(cache.fx ?? {})) { fxNow[c] = v.rate; fxAt[c] = v.at; }
+    if (cache.refRates) ({ rates: refRates, at: refRatesAt } = cache.refRates);
   } catch (e) {
     // Do not continue with empty data: the next save would overwrite the file.
     document.querySelectorAll("form button").forEach((b) => { b.disabled = true; });
