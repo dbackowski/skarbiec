@@ -50,6 +50,32 @@ npm run tauri build    # aplikacja .app / .dmg w src-tauri/target/release/bundle
 npm run test:all       # wszystkie testy (JS + Rust)
 ```
 
+## Instalacja i aktualizacja
+
+Aplikację buduje się lokalnie i kopiuje do folderu Aplikacje. Aktualizacja to te same kroki na nowszym
+kodzie.
+
+```sh
+git pull                 # najnowszy kod (przy pierwszej instalacji pomiń)
+npm ci                   # zależności dokładnie z package-lock.json
+npm run test:all         # nie instaluj wersji, w której testy nie przechodzą
+npm run tauri build      # kilka minut przy pierwszym budowaniu
+```
+
+Następnie zamknij działający Skarbiec (Cmd+Q) i podmień aplikację:
+
+```sh
+rm -rf /Applications/Skarbiec.app
+ditto src-tauri/target/release/bundle/macos/Skarbiec.app /Applications/Skarbiec.app
+```
+
+- Dane (`~/Library/Application Support/pl.local.skarbiec/skarbiec.json`) leżą poza aplikacją, więc
+  podmiana ich nie dotyka. Przed większą aktualizacją możesz i tak kliknąć „Eksportuj kopię”.
+- Aplikacja zbudowana na własnym komputerze uruchamia się bez ostrzeżeń macOS. Ostrzeżenie Gatekeepera
+  pojawia się dopiero przy aplikacji pobranej z internetu, bo nie jest podpisana kontem Apple Developer.
+- Build tworzy też instalator `.dmg` w `src-tauri/target/release/bundle/dmg/`, przydatny do przeniesienia
+  aplikacji na inny Mac.
+
 ## Testy
 
 ```sh
