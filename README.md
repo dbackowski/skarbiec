@@ -45,8 +45,30 @@ i Xcode Command Line Tools na macOS.
 npm install
 npm run tauri dev      # tryb deweloperski
 npm run tauri build    # aplikacja .app / .dmg w src-tauri/target/release/bundle
-npm test               # testy obliczeń (node --test)
+npm run test:all       # wszystkie testy (JS + Rust)
 ```
+
+## Testy
+
+```sh
+npm test               # testy jednostkowe + testy interfejsu w Chrome
+npm run test:rust      # testy części w Ruście
+npm run test:all       # jedno i drugie
+```
+
+- **Jednostkowe** (`test/*.test.js`, `node --test`): pozycje i średnia cena, wycena w PLN z kursami walut,
+  obligacje ROR, oszczędności, podział portfela, pobieranie kursów z Yahoo/NBP (z podstawionym `fetch`),
+  czytnik XLSX, parser raportów XTB i budowanie importu.
+- **Interfejs** (`test/e2e.test.js`): prawdziwy interfejs z `src/` w Google Chrome (przez `playwright-core`,
+  bez pobierania przeglądarki). Tauri jest zastąpione atrapą z plikiem danych w pamięci i stałymi kursami,
+  zegar ustawiony na 15.11.2026. Sprawdza dashboard co do grosza, formularze, usuwanie, zakładki, tryb
+  bez połączenia, import XTB z kopią zapasową, eksport i zachowanie przy nieczytelnym pliku danych.
+- **Rust** (`src-tauri/src/lib.rs`): odczyt i atomowy zapis pliku danych, odrzucanie niepoprawnego JSON,
+  nazwy kopii zapasowych i usuwanie najstarszych.
+- **Pliki XTB w testach** (`test/fixtures/*.xlsx`) mają wymyślone dane w strukturze prawdziwych raportów.
+  Generuje je `python3 test/fixtures/make_xtb_fixtures.py`.
+
+Testy interfejsu wymagają zainstalowanej przeglądarki Google Chrome.
 
 ## Import z XTB
 
@@ -107,13 +129,15 @@ Przywracanie: zamknij aplikację i skopiuj wybraną kopię w miejsce `skarbiec.j
 
 ```
 src/
-  index.html, styles.css, main.js   interfejs (vanilla JS, bez bundlera)
+  index.html, styles.css, main.js   interfejs (vanilla JS, bez bundlera); bez obliczeń
   portfolio.js                      pozycje, konta, symbole XTB → Yahoo, oszczędności
-  bonds.js                          obligacje ROR, stopy NBP
+  valuation.js                      wycena w PLN, podział portfela, przypomnienia, komunikaty
+  market.js                         kursy z Yahoo i NBP, stopy NBP
+  bonds.js                          obligacje ROR
   xlsx.js                           minimalny czytnik XLSX
-  xtb.js                            raport xStation → transakcje
+  xtb.js                            raport xStation → transakcje, budowanie importu
 src-tauri/                          powłoka Tauri: zapis/odczyt pliku danych, uprawnienia
-test/                               testy node --test
+test/                               testy (jednostkowe, interfejsu, pliki testowe XTB)
 design/icon.svg                     źródło ikony (npx tauri icon design/icon.svg)
 ```
 

@@ -1,66 +1,33 @@
-import { ACCOUNTS, positions, savings, yahooSymbol } from "./portfolio.js";
-import { maturityReminders, ror, parseNbpRefRates } from "./bonds.js";
+// UI glue: DOM, events and persistence. All calculations live in the imported modules.
+import { ACCOUNTS, positions, yahooSymbol } from "./portfolio.js";
+import { fetchFx, fetchQuote, fetchRefRates } from "./market.js";
+import { portfolio, refreshMessage, reminderTexts } from "./valuation.js";
 import { readXlsx } from "./xlsx.js";
-import { parseXtbReport } from "./xtb.js";
+import { buildImport, importSummary, parseXtbReport } from "./xtb.js";
 
 const { invoke } = window.__TAURI__.core;
-const http = window.__TAURI__.http;
+const httpFetch = (...args) => window.__TAURI__.http.fetch(...args);
 
 let data = { transactions: [], bonds: [], savings: [] };
 // Last fetched market data, also saved in the data file (data.cache) so the app shows the
 // last known values when offline. `at` = ISO time of the fetch.
-let refRates = null; // NBP reference rate history, fetched when there are bonds
-let refRatesAt = null;
-const quotes = {}; // symbol -> { price, currency, at }
-const fxNow = { PLN: 1 }; // currency -> PLN per unit, today
-const fxAt = {}; // currency -> at
-let refreshedAt = null; // start of the last refresh; older data is shown as cached
-
-const isStale = (at) => !refreshedAt || !at || at < refreshedAt;
+const market = { quotes: {}, fx: { PLN: 1 }, fxAt: {}, refRates: null, refRatesAt: null };
+// Keys ("q:SYMBOL", "fx:EUR", "refRates") fetched by the last refresh; anything else on screen
+// comes from the saved cache and is marked with "*".
+let fresh = new Set();
 const fmtTime = (at) => new Date(at).toLocaleString("pl-PL", { dateStyle: "short", timeStyle: "short" });
 
 const $ = (sel) => document.querySelector(sel);
 const num = new Intl.NumberFormat("pl-PL", { maximumFractionDigits: 4 });
 const money = new Intl.NumberFormat("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const today = () => new Date().toLocaleDateString("sv-SE"); // local YYYY-MM-DD
+const pct = (x) => `${money.format(x * 100)}%`;
+const sign = (x) => (x > 0 ? "up" : x < 0 ? "down" : "");
+const dash = "–";
 
 function status(msg, isError = false) {
   $("#status").textContent = msg;
   $("#status").className = isError ? "error" : "";
-}
-
-async function getJson(url) {
-  const r = await http.fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
-  if (!r.ok) throw new Error(`HTTP ${r.status}: ${url}`);
-  return r.json();
-}
-
-// ponytail: unofficial Yahoo endpoint, no key. Swap the source here if it breaks.
-async function fetchQuote(symbol) {
-  let j;
-  try {
-    j = await getJson(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d`);
-  } catch (e) {
-    throw new Error(`Nie udało się pobrać notowań ${symbol} (${e.message ?? e})`);
-  }
-  const m = j?.chart?.result?.[0]?.meta;
-  if (!m?.regularMarketPrice) throw new Error(`Nie znaleziono notowań dla ${symbol}`);
-  // London quotes come in pence.
-  if (m.currency === "GBp") return { price: m.regularMarketPrice / 100, currency: "GBP" };
-  return { price: m.regularMarketPrice, currency: m.currency };
-}
-
-// NBP table A mid rate from the last publication on or before `date`.
-async function fetchFx(currency, date) {
-  if (currency === "PLN") return 1;
-  const end = new Date(date);
-  const start = new Date(end);
-  start.setDate(start.getDate() - 10); // covers weekends and holidays
-  const iso = (d) => d.toISOString().slice(0, 10);
-  const j = await getJson(
-    `https://api.nbp.pl/api/exchangerates/rates/a/${currency.toLowerCase()}/${iso(start)}/${iso(end)}/?format=json`,
-  );
-  return j.rates.at(-1).mid;
 }
 
 // Persist first, then swap in-memory state, so a failed write leaves both consistent.
@@ -77,18 +44,18 @@ function persist(patch) {
   return run;
 }
 
-async function fetchRefRates() {
-  const r = await http.fetch("https://static.nbp.pl/dane/stopy/stopy_procentowe_archiwum.xml");
-  if (!r.ok) throw new Error(`HTTP ${r.status}: stopy NBP`);
-  return parseNbpRefRates(await r.text());
-}
+// style goes through CSSOM: the CSP blocks inline style attributes, not element.style.
+const el = (tag, { style, ...props } = {}, ...children) => {
+  const e = Object.assign(document.createElement(tag), props);
+  if (style) Object.assign(e.style, style);
+  e.append(...children);
+  return e;
+};
+const cell = (text, cls) => el("td", { textContent: text, ...(cls ? { className: cls } : {}) });
 
 // Two clicks to delete: window.confirm is not available in every Tauri webview.
 function deleteButton(onConfirm) {
-  const td = document.createElement("td");
-  const del = document.createElement("button");
-  del.type = "button";
-  del.textContent = "Usuń";
+  const del = el("button", { type: "button", textContent: "Usuń" });
   del.addEventListener("click", async () => {
     if (del.textContent === "Usuń") { del.textContent = "Na pewno?"; return; }
     try {
@@ -98,148 +65,78 @@ function deleteButton(onConfirm) {
     }
     render();
   });
-  td.append(del);
-  return td;
+  return el("td", {}, del);
 }
-
-function cell(text, cls) {
-  const td = document.createElement("td");
-  td.textContent = text;
-  if (cls) td.className = cls;
-  return td;
-}
-
-const sign = (x) => (x > 0 ? "up" : x < 0 ? "down" : "");
 
 function render() {
-  const order = Object.keys(ACCOUNTS);
-  const open = positions(data.transactions)
-    .filter((p) => p.qty > 1e-9)
-    .sort((a, b) => order.indexOf(a.account) - order.indexOf(b.account) || a.symbol.localeCompare(b.symbol));
-  const rows = open.map((p) => {
-    const q = quotes[p.symbol];
-    const fx = fxNow[p.currency];
-    const value = q ? p.qty * q.price : null;
-    const valuePln = value != null && fx ? value * fx : null;
-    return { p, q, value, valuePln, pl: value != null ? value - p.cost : null,
-             plPln: valuePln != null ? valuePln - p.costPln : null };
-  });
+  const pf = portfolio(data, market, today());
 
-  $("#positions").replaceChildren(...rows.map(({ p, q, value, valuePln, pl, plPln }) => {
-    const tr = document.createElement("tr");
-    const dash = "–";
-    tr.append(
-      cell(p.symbol),
-      cell(ACCOUNTS[p.account]),
-      cell(num.format(p.qty)),
-      cell(`${money.format(p.cost / p.qty)} ${p.currency}`),
-      Object.assign(cell(q ? `${money.format(q.price)}${isStale(q.at) ? " *" : ""}` : dash),
-                    { title: q?.at ? `Kurs z ${fmtTime(q.at)}` : "" }),
-      cell(value != null ? money.format(value) : dash),
-      cell(pl != null ? money.format(pl) : dash, sign(pl)),
-      cell(pl != null ? `${money.format((pl / p.cost) * 100)}%` : dash, sign(pl)),
-      cell(valuePln != null ? money.format(valuePln) : dash),
-      cell(plPln != null ? money.format(plPln) : dash, sign(plPln)),
-    );
-    return tr;
-  }));
+  $("#positions").replaceChildren(...pf.positionRows.map(({ p, q, value, valuePln, pl, plPln }) => el("tr", {},
+    cell(p.symbol),
+    cell(ACCOUNTS[p.account]),
+    cell(num.format(p.qty)),
+    cell(`${money.format(p.cost / p.qty)} ${p.currency}`),
+    Object.assign(cell(q ? `${money.format(q.price)}${fresh.has(`q:${p.symbol}`) ? "" : " *"}` : dash),
+                  { title: q?.at ? `Kurs z ${fmtTime(q.at)}` : "" }),
+    cell(value != null ? money.format(value) : dash),
+    cell(pl != null ? money.format(pl) : dash, sign(pl)),
+    cell(pl != null ? pct(pl / p.cost) : dash, sign(pl)),
+    cell(valuePln != null ? money.format(valuePln) : dash),
+    cell(plPln != null ? money.format(plPln) : dash, sign(plPln)),
+  )));
 
-  const { counted: bondRows, unpriced: bondsUnpriced } = renderBonds();
-  const savingRows = renderSavings();
-  const missing = rows.filter((r) => r.valuePln == null).length + bondsUnpriced
-    + data.savings.length - savingRows.length;
-  const parts = allocation(rows, bondRows, savingRows);
-  renderDashboard(rows, parts, missing);
-  $("#accounts").textContent = parts.filter((x) => x.key in ACCOUNTS && x.value > 0)
+  $("#accounts").textContent = pf.parts.filter((x) => x.key in ACCOUNTS && x.value > 0)
     .map((x) => `${ACCOUNTS[x.key]}: ${money.format(x.value)} PLN (zysk ${money.format(x.pl)})`).join(" · ");
 
   const txs = [...data.transactions].sort((a, b) => b.date.localeCompare(a.date));
-  $("#transactions").replaceChildren(...txs.map((t) => {
-    const tr = document.createElement("tr");
-    const td = deleteButton(async () => {
+  $("#transactions").replaceChildren(...txs.map((t) => el("tr", {},
+    cell(t.date), cell(t.symbol), cell(ACCOUNTS[t.account] + (t.xtb ? " · XTB" : "")),
+    cell(t.side === "buy" ? "Kupno" : "Sprzedaż"),
+    cell(num.format(t.qty)), cell(`${money.format(t.price)} ${t.currency}`),
+    cell(money.format(t.fee)), cell(num.format(t.fx)),
+    deleteButton(async () => {
       const next = data.transactions.filter((x) => x.id !== t.id);
       positions(next); // removing a buy may leave a later sell uncovered
       await persist({ transactions: next });
-    });
-    tr.append(
-      cell(t.date), cell(t.symbol), cell(ACCOUNTS[t.account] + (t.xtb ? " · XTB" : "")), cell(t.side === "buy" ? "Kupno" : "Sprzedaż"),
-      cell(num.format(t.qty)), cell(`${money.format(t.price)} ${t.currency}`),
-      cell(money.format(t.fee)), cell(num.format(t.fx)), td,
-    );
-    return tr;
-  }));
-}
-
-const sum = (xs, f) => xs.reduce((s, x) => s + f(x), 0);
-const pct = (x) => `${money.format(x * 100)}%`;
-// style goes through CSSOM: the CSP blocks inline style attributes, not element.style.
-const el = (tag, { style, ...props } = {}, ...children) => {
-  const e = Object.assign(document.createElement(tag), props);
-  if (style) Object.assign(e.style, style);
-  e.append(...children);
-  return e;
-};
-
-// Fixed part order = fixed color slot per part (color follows the entity, not its rank).
-function allocation(rows, bondRows, savingRows) {
-  const priced = rows.filter((r) => r.valuePln != null);
-  return [
-    ...Object.entries(ACCOUNTS).map(([key, label]) => {
-      const rs = priced.filter((r) => r.p.account === key);
-      return { key, label: `ETF i akcje · ${label}`, value: sum(rs, (r) => r.valuePln),
-               pl: sum(rs, (r) => r.plPln), cost: sum(rs, (r) => r.p.costPln) };
     }),
-    { key: "bonds", label: "Obligacje", value: sum(bondRows, (r) => r.valuePln),
-      pl: sum(bondRows, (r) => r.plPln), cost: sum(bondRows, (r) => r.cost) },
-    { key: "savings", label: "Oszczędności", value: sum(savingRows, (r) => r.valuePln),
-      pl: sum(savingRows, (r) => r.plPln), cost: sum(savingRows, (r) => r.cost) },
-  ].map((x, i) => ({ ...x, slot: i + 1 }));
+  )));
+
+  renderBonds(pf.bonds);
+  renderSavings(pf.cash);
+  renderDashboard(pf);
 }
 
-function renderReminders() {
-  const items = maturityReminders(data.bonds, today()).map((r) => {
-    const amount = `${money.format(r.qty * 100)} zł`;
-    if (r.daysLeft > 0) {
-      return `${r.series} (${r.qty} szt.): wykup ${r.maturity}, za ${r.daysLeft} ${r.daysLeft === 1 ? "dzień" : "dni"}. `
-        + `Wróci ${amount} plus odsetki za ostatni miesiąc. Zdecyduj, czy wypłacić, czy zamienić na nową serię.`;
-    }
-    if (r.daysLeft === 0) return `${r.series} (${r.qty} szt.): wykup dzisiaj, ${amount} plus odsetki za ostatni miesiąc.`;
-    return `${r.series} (${r.qty} szt.): wykupiona ${r.maturity}. Możesz ją usunąć z zakładki Obligacje.`;
-  });
-  $("#reminders-list").replaceChildren(...items.map((text) => el("li", { textContent: text })));
-  $("#reminders").hidden = !items.length;
-}
+function renderDashboard(pf) {
+  const reminders = reminderTexts(data.bonds, today());
+  $("#reminders-list").replaceChildren(...reminders.map((text) => el("li", { textContent: text })));
+  $("#reminders").hidden = !reminders.length;
 
-function renderDashboard(rows, parts, missing) {
-  renderReminders();
-  const total = sum(parts, (x) => x.value);
-  const pl = sum(parts, (x) => x.pl);
-  const cost = sum(parts, (x) => x.cost);
-  $("#hero-value").textContent = `${money.format(total)} PLN`;
+  $("#hero-value").textContent = `${money.format(pf.total)} PLN`;
   $("#hero-pl").replaceChildren(
     "Zysk: ",
-    el("span", { className: sign(pl), textContent: `${money.format(pl)} PLN${cost ? ` (${pct(pl / cost)})` : ""}` }),
-    missing ? ` · bez kursu: ${missing}` : "",
+    el("span", { className: sign(pf.pl), textContent: `${money.format(pf.pl)} PLN${pf.cost ? ` (${pct(pf.pl / pf.cost)})` : ""}` }),
+    pf.missing ? ` · bez kursu: ${pf.missing}` : "",
   );
 
-  const etf = parts.filter((x) => x.key in ACCOUNTS);
-  const bonds = parts.find((x) => x.key === "bonds");
-  const cash = parts.find((x) => x.key === "savings");
+  const etf = pf.parts.filter((x) => x.key in ACCOUNTS);
+  const etfValue = etf.reduce((s, x) => s + x.value, 0);
+  const etfPl = etf.reduce((s, x) => s + x.pl, 0);
+  const bonds = pf.parts.find((x) => x.key === "bonds");
+  const cash = pf.parts.find((x) => x.key === "savings");
   const tile = (label, value, sub, cls = "") => el("div", { className: "tile" },
     el("div", { className: "label", textContent: label }),
     el("div", { className: "value", textContent: value }),
     el("div", { className: `sub ${cls}`, textContent: sub }));
-  const etfPl = sum(etf, (x) => x.pl);
   $("#kpis").replaceChildren(
-    tile("ETF i akcje", `${money.format(sum(etf, (x) => x.value))} PLN`, `zysk ${money.format(etfPl)} PLN`, sign(etfPl)),
+    tile("ETF i akcje", `${money.format(etfValue)} PLN`, `zysk ${money.format(etfPl)} PLN`, sign(etfPl)),
     tile("Obligacje", `${money.format(bonds.value)} PLN`, `odsetki ${money.format(bonds.pl)} PLN`, sign(bonds.pl)),
     tile("Oszczędności", `${money.format(cash.value)} PLN`, `narosłe odsetki ${money.format(cash.pl)} PLN`, sign(cash.pl)),
-    tile("Wpłacony kapitał", `${money.format(cost)} PLN`, "koszt zakupu otwartych pozycji"),
+    tile("Wpłacony kapitał", `${money.format(pf.cost)} PLN`, "koszt zakupu otwartych pozycji"),
   );
 
-  // Tall segmented bar: one whole split into <= 4 parts; zero parts draw nothing.
-  const shown = parts.filter((x) => x.value > 0);
-  const share = (x) => (total ? x.value / total : 0);
+  // Tall segmented bar: one whole split into parts; zero parts draw nothing.
+  const shown = pf.parts.filter((x) => x.value > 0);
+  const share = (x) => (pf.total ? x.value / pf.total : 0);
   $("#alloc-bar").setAttribute("aria-label",
     shown.map((x) => `${x.label}: ${money.format(x.value)} PLN, ${pct(share(x))}`).join("; ") || "Brak danych");
   $("#alloc-bar").replaceChildren(...shown.map((x) => el("div", {
@@ -256,7 +153,7 @@ function renderDashboard(rows, parts, missing) {
     cell(x.label), cell(money.format(x.value)), cell(pct(share(x))), cell(money.format(x.pl), sign(x.pl)))));
 
   // Ranked bars, one hue: largest ETF/stock positions by PLN value.
-  const top = rows.filter((r) => r.valuePln != null).sort((a, b) => b.valuePln - a.valuePln).slice(0, 8);
+  const top = pf.positionRows.filter((r) => r.valuePln != null).sort((a, b) => b.valuePln - a.valuePln).slice(0, 8);
   const max = top[0]?.valuePln ?? 1;
   $("#top-positions").replaceChildren(...top.map((r) => el("div", { className: "rank-row" },
     el("div", { className: "rank-name", textContent: `${r.p.symbol} · ${ACCOUNTS[r.p.account]}` }),
@@ -270,50 +167,28 @@ function renderDashboard(rows, parts, missing) {
   if (!top.length) $("#top-positions").textContent = "Brak pozycji z kursem.";
 }
 
-// Renders the bonds table; returns rows that count toward the PLN total and how many bonds
-// could not be valued (no NBP rates yet). Matured bonds are worth 0, not unpriced.
-function renderBonds() {
-  const dash = "–";
-  const counted = [];
-  let unpriced = 0;
-  const bonds = [...data.bonds].sort((a, b) => b.date.localeCompare(a.date));
-  $("#bonds").replaceChildren(...bonds.map((b) => {
-    const tr = document.createElement("tr");
-    let r = null;
-    try {
-      if (refRates) r = ror(b, refRates, today());
-    } catch (e) {
-      status(e.message, true);
-    }
-    if (!r) unpriced++;
-    else if (!r.matured) counted.push({ valuePln: r.value, plPln: r.paid + r.accrued, cost: b.qty * 100 });
-    tr.append(
-      cell(b.series), cell(num.format(b.qty)), cell(b.date), cell(r ? r.maturity : dash),
-      cell(r ? (r.matured ? "wykupiona" : `${r.current.period}/12`) : dash),
-      cell(r?.current ? `${num.format(r.current.rate)}%` : dash),
-      cell(r ? money.format(r.paid) : dash),
-      cell(r ? money.format(r.accrued) : dash),
-      cell(r ? money.format(r.value) : dash),
-      cell(r ? money.format(r.redeemNow) : dash),
-      deleteButton(() => persist({ bonds: data.bonds.filter((x) => x.id !== b.id) })),
-    );
-    return tr;
-  }));
-  return { counted, unpriced };
+function renderBonds({ rows }) {
+  const error = rows.find((x) => x.error)?.error;
+  if (error) status(error, true);
+  $("#bonds").replaceChildren(...rows.map(({ b, r }) => el("tr", {},
+    cell(b.series), cell(num.format(b.qty)), cell(b.date), cell(r ? r.maturity : dash),
+    cell(r ? (r.matured ? "wykupiona" : `${r.current.period}/12`) : dash),
+    cell(r?.current ? `${num.format(r.current.rate)}%` : dash),
+    cell(r ? money.format(r.paid) : dash),
+    cell(r ? money.format(r.accrued) : dash),
+    cell(r ? money.format(r.value) : dash),
+    cell(r ? money.format(r.redeemNow) : dash),
+    deleteButton(() => persist({ bonds: data.bonds.filter((x) => x.id !== b.id) })),
+  )));
 }
 
-// Renders the savings table; returns rows that count toward the PLN total.
-function renderSavings() {
-  const counted = [];
-  $("#savings").replaceChildren(...data.savings.map((a) => {
-    const s = savings(a, today());
-    const fx = fxNow[a.currency];
-    if (fx) counted.push({ valuePln: s.value * fx, plPln: s.accrued * fx, cost: a.balance * fx });
+function renderSavings({ rows }) {
+  $("#savings").replaceChildren(...rows.map(({ a, s, valuePln }) => {
     const input = el("input", { type: "number", step: "0.01", min: "0", value: String(a.balance), className: "inline" });
     const save = el("button", { type: "button", textContent: "Zapisz saldo", className: "secondary" });
     save.addEventListener("click", async () => {
       const balance = Number(input.value);
-      if (!(balance >= 0)) return status("Saldo musi być ≥ 0", true);
+      if (input.value === "" || !(balance >= 0)) return status("Saldo musi być ≥ 0", true);
       try {
         await persist({ savings: data.savings.map((x) => (x.id === a.id ? { ...x, balance, since: today() } : x)) });
       } catch (e) {
@@ -324,71 +199,48 @@ function renderSavings() {
     return el("tr", {},
       cell(a.name), cell(`${num.format(a.rate)}%`), cell(`${money.format(a.balance)} ${a.currency}`), cell(a.since),
       cell(money.format(s.accrued)), cell(money.format(s.monthly)),
-      cell(fx ? money.format(s.value * fx) : "–"),
+      cell(valuePln != null ? money.format(valuePln) : dash),
       el("td", {}, input, save),
       deleteButton(() => persist({ savings: data.savings.filter((x) => x.id !== a.id) })),
     );
   }));
-  return counted;
-}
-
-async function addSavings(e) {
-  e.preventDefault();
-  const form = e.target;
-  const f = new FormData(form);
-  const name = f.get("name").trim();
-  const currency = f.get("currency");
-  const balance = Number(f.get("balance"));
-  const rate = Number(f.get("rate"));
-  if (!name) return status("Podaj nazwę konta", true);
-  if (!(balance >= 0) || !(rate >= 0)) return status("Saldo i oprocentowanie muszą być ≥ 0", true);
-  try {
-    await persist({ savings: [...data.savings, { id: crypto.randomUUID(), name, currency, balance, rate, since: today() }] });
-    form.reset();
-    await refresh();
-  } catch (err) {
-    status(err.message ?? String(err), true);
-  }
 }
 
 async function refresh() {
   const open = positions(data.transactions).filter((p) => p.qty > 1e-9);
   const currencies = [...new Set([...open, ...data.savings].map((p) => p.currency))].filter((c) => c !== "PLN");
   const now = new Date().toISOString();
-  refreshedAt = now;
+  fresh = new Set();
   status("Pobieranie kursów…");
   const errors = [];
   await Promise.all([
-    ...open.map((p) => fetchQuote(p.symbol)
-      .then((q) => { quotes[p.symbol] = { ...q, at: now }; })
+    ...open.map((p) => fetchQuote(httpFetch, p.symbol)
+      .then((q) => { market.quotes[p.symbol] = { ...q, at: now }; fresh.add(`q:${p.symbol}`); })
       .catch((e) => errors.push(e.message))),
-    ...currencies.map((c) => fetchFx(c, today())
-      .then((r) => { fxNow[c] = r; fxAt[c] = now; })
+    ...currencies.map((c) => fetchFx(httpFetch, c, today())
+      .then((r) => { market.fx[c] = r; market.fxAt[c] = now; fresh.add(`fx:${c}`); })
       .catch((e) => errors.push(`Kurs ${c}: ${e.message ?? e}`))),
-    data.bonds.length && fetchRefRates()
-      .then((r) => { refRates = r; refRatesAt = now; })
+    data.bonds.length && fetchRefRates(httpFetch)
+      .then((r) => { market.refRates = r; market.refRatesAt = now; fresh.add("refRates"); })
       .catch((e) => errors.push(`Stopy NBP: ${e.message ?? e}`)),
   ]);
 
   // Values still shown from the saved cache because this refresh could not replace them.
   const cachedAt = [
-    ...open.map((p) => quotes[p.symbol]?.at),
-    ...currencies.map((c) => fxNow[c] && fxAt[c]),
-    data.bonds.length && refRates && refRatesAt,
-  ].filter((at) => at && isStale(at));
+    ...open.filter((p) => !fresh.has(`q:${p.symbol}`)).map((p) => market.quotes[p.symbol]?.at),
+    ...currencies.filter((c) => !fresh.has(`fx:${c}`) && market.fx[c]).map((c) => market.fxAt[c]),
+    data.bonds.length && !fresh.has("refRates") && market.refRates && market.refRatesAt,
+  ].filter(Boolean).sort();
   render();
 
   const total = open.length + currencies.length + (data.bonds.length ? 1 : 0);
-  let msg = !errors.length ? `Kursy z ${new Date().toLocaleTimeString("pl-PL")}`
-    : errors.length === total && total > 1 ? "Brak połączenia, nic nie udało się odświeżyć"
-    : `Nie udało się odświeżyć: ${errors.join(" · ")}`;
-  if (cachedAt.length) msg += `. Pokazuję zapisane dane z ${fmtTime(cachedAt.sort()[0])} (oznaczone *).`;
+  let msg = refreshMessage({ errors, total, oldestCached: cachedAt[0], now: new Date().toLocaleTimeString("pl-PL"), fmtTime });
   if (errors.length < total) {
     try {
       await persist({ cache: {
-        quotes,
-        fx: Object.fromEntries(currencies.filter((c) => fxNow[c]).map((c) => [c, { rate: fxNow[c], at: fxAt[c] }])),
-        refRates: refRates && { rates: refRates, at: refRatesAt },
+        quotes: market.quotes,
+        fx: Object.fromEntries(currencies.filter((c) => market.fx[c]).map((c) => [c, { rate: market.fx[c], at: market.fxAt[c] }])),
+        refRates: market.refRates && { rates: market.refRates, at: market.refRatesAt },
       } });
     } catch (e) {
       msg += ` Nie udało się zapisać kursów: ${e.message ?? e}`;
@@ -400,8 +252,6 @@ async function refresh() {
 let pendingImport = null; // transactions after import, waiting for confirmation
 
 // Reads XTB reports and shows what an import would change; nothing is saved until confirmed.
-// Re-importing an XTB account replaces its earlier imported transactions; manual transactions
-// for the same account and symbol are dropped so holdings are not counted twice.
 async function previewXtb(e) {
   const files = [...e.target.files];
   e.target.value = ""; // allow picking the same files again
@@ -410,44 +260,13 @@ async function previewXtb(e) {
   try {
     const reports = [];
     for (const f of files) reports.push(parseXtbReport(await readXlsx(await f.arrayBuffer()), f.name));
-    const numbers = reports.map((r) => r.accountNumber);
-    if (new Set(numbers).size !== numbers.length) throw new Error("Ten sam rachunek XTB jest w kilku plikach");
-
-    const quotesBySymbol = new Map();
-    const nbpCache = new Map();
-    const cached = (map, key, load) => (map.has(key) ? map.get(key) : map.set(key, load()).get(key));
-    const imported = [];
-    for (const r of reports) {
-      for (const t of r.trades) {
-        const { currency } = await cached(quotesBySymbol, t.symbol, () => fetchQuote(t.symbol));
-        const fx = currency === "PLN" ? 1
-          : r.currency === "PLN" && t.cashFx ? t.cashFx // XTB's own conversion, matches the PLN it charged
-          : await cached(nbpCache, `${currency}|${t.date}`, () => fetchFx(currency, t.date));
-        // ponytail: commission is in account currency; converted only for PLN accounts (XTB ETF trades are mostly fee-free).
-        const fee = currency === r.currency || r.currency !== "PLN" ? t.feeAccount : t.feeAccount / fx;
-        imported.push({ id: crypto.randomUUID(), account: r.account, symbol: t.symbol, side: t.side, date: t.date,
-                        qty: t.qty, price: t.price, fee, currency, fx, xtb: { account: r.accountNumber, position: t.position } });
-      }
-    }
-
-    const keys = new Set(imported.map((t) => `${t.account}|${t.symbol}`));
-    const replaced = data.transactions.filter((t) => t.xtb && numbers.includes(t.xtb.account));
-    const manual = data.transactions.filter((t) => !t.xtb && keys.has(`${t.account}|${t.symbol}`));
-    const next = [...data.transactions.filter((t) => !replaced.includes(t) && !manual.includes(t)), ...imported];
-    positions(next); // validates sells against holdings
-    pendingImport = next;
-
-    const items = reports.map((r) => {
-      const symbols = [...new Set(r.trades.map((t) => t.symbol))].join(", ") || "brak pozycji";
-      const skipped = r.skipped.length ? ` · pominięte (nie BUY): ${r.skipped.join(", ")}` : "";
-      return `${r.fileName}: ${ACCOUNTS[r.account]}, waluta ${r.currency}, ${r.trades.length} transakcji (${symbols})${skipped}`;
+    const result = await buildImport(reports, data.transactions, {
+      quote: (symbol) => fetchQuote(httpFetch, symbol),
+      fx: (currency, date) => fetchFx(httpFetch, currency, date),
+      newId: () => crypto.randomUUID(),
     });
-    if (replaced.length) items.push(`Zastąpione wcześniej zaimportowane transakcje: ${replaced.length}`);
-    if (manual.length) {
-      items.push(`Usunięte ręczne transakcje tych samych symboli na tych kontach: ${
-        manual.map((t) => `${t.date} ${t.symbol} (${ACCOUNTS[t.account]}) ${num.format(t.qty)} szt.`).join("; ")}`);
-    }
-    $("#xtb-summary").replaceChildren(...items.map((text) => el("li", { textContent: text })));
+    pendingImport = result.next;
+    $("#xtb-summary").replaceChildren(...importSummary(reports, result).map((text) => el("li", { textContent: text })));
     $("#xtb-preview").hidden = false;
     status("Sprawdź podsumowanie i potwierdź import.");
   } catch (err) {
@@ -490,21 +309,22 @@ async function addTransaction(e) {
   const qty = Number(f.get("qty"));
   const price = Number(f.get("price"));
   const fee = Number(f.get("fee") || 0);
-  if (!(qty > 0) || !(price > 0) || fee < 0) return status("Ilość i cena muszą być > 0, prowizja ≥ 0", true);
+  if (!(qty > 0) || !(price > 0) || !(fee >= 0)) return status("Ilość i cena muszą być > 0, prowizja ≥ 0", true);
   if (date > today()) return status("Data z przyszłości", true);
 
   const button = form.querySelector("button");
   button.disabled = true;
   try {
     status(`Sprawdzanie ${symbol}…`);
-    const q = await fetchQuote(symbol);
-    const fx = await fetchFx(q.currency, date);
+    const q = await fetchQuote(httpFetch, symbol);
+    const fx = await fetchFx(httpFetch, q.currency, date);
     const account = f.get("account");
     if (!(account in ACCOUNTS)) throw new Error("Nieznany typ konta");
     const tx = { id: crypto.randomUUID(), account, symbol, side: f.get("side"), date, qty, price, fee, currency: q.currency, fx };
     positions([...data.transactions, tx]); // throws on overselling
     await persist({ transactions: [...data.transactions, tx] });
-    quotes[symbol] = { ...q, at: new Date().toISOString() };
+    market.quotes[symbol] = { ...q, at: new Date().toISOString() };
+    fresh.add(`q:${symbol}`);
     form.reset();
     form.date.value = today();
     form.account.value = account; // keep the account for the next entry
@@ -539,6 +359,25 @@ async function addBond(e) {
   }
 }
 
+async function addSavings(e) {
+  e.preventDefault();
+  const form = e.target;
+  const f = new FormData(form);
+  const name = f.get("name").trim();
+  const currency = f.get("currency");
+  const balance = Number(f.get("balance"));
+  const rate = Number(f.get("rate"));
+  if (!name) return status("Podaj nazwę konta", true);
+  if (!(balance >= 0) || !(rate >= 0)) return status("Saldo i oprocentowanie muszą być ≥ 0", true);
+  try {
+    await persist({ savings: [...data.savings, { id: crypto.randomUUID(), name, currency, balance, rate, since: today() }] });
+    form.reset();
+    await refresh();
+  } catch (err) {
+    status(err.message ?? String(err), true);
+  }
+}
+
 function showTab(name) {
   for (const b of document.querySelectorAll("[data-tab]")) b.setAttribute("aria-selected", b.dataset.tab === name);
   for (const m of document.querySelectorAll("[role=tabpanel]")) m.hidden = m.id !== `tab-${name}`;
@@ -567,9 +406,9 @@ window.addEventListener("DOMContentLoaded", async () => {
     data = { transactions: [], bonds: [], savings: [], ...JSON.parse(await invoke("load_data")) };
     for (const t of data.transactions) t.account ??= "regular"; // pre-account data
     const cache = data.cache ?? {};
-    Object.assign(quotes, cache.quotes);
-    for (const [c, v] of Object.entries(cache.fx ?? {})) { fxNow[c] = v.rate; fxAt[c] = v.at; }
-    if (cache.refRates) ({ rates: refRates, at: refRatesAt } = cache.refRates);
+    Object.assign(market.quotes, cache.quotes);
+    for (const [c, v] of Object.entries(cache.fx ?? {})) { market.fx[c] = v.rate; market.fxAt[c] = v.at; }
+    if (cache.refRates) ({ rates: market.refRates, at: market.refRatesAt } = cache.refRates);
   } catch (e) {
     // Do not continue with empty data: the next save would overwrite the file.
     document.querySelectorAll("form button").forEach((b) => { b.disabled = true; });

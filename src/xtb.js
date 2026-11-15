@@ -5,7 +5,7 @@
 // report period). Each Closed Positions row becomes a buy at its open and a sell at its close.
 // Cash Operations give the real account-currency cost of each buy, i.e. XTB's own FX rate.
 
-import { yahooSymbol } from "./portfolio.js";
+import { ACCOUNTS, positions, yahooSymbol } from "./portfolio.js";
 
 const PRODUCT_ACCOUNT = { IKE: "ike", IKZE: "ikze" };
 
@@ -81,4 +81,53 @@ export function parseXtbReport(sheets, fileName = "") {
                   feeAccount: Math.abs(num(r.Commission)), cashFx: null });
   }
   return { fileName, accountNumber, account, currency, trades, skipped };
+}
+
+// Turns parsed reports into the transaction list to save. `quote(symbol)` resolves the instrument
+// currency, `fx(currency, date)` the NBP rate; both are injected (network in the app, fakes in tests).
+// Re-importing an XTB account replaces its earlier imported transactions; manual transactions for
+// the same account and symbol are dropped so holdings are not counted twice.
+export async function buildImport(reports, existing, { quote, fx, newId }) {
+  const numbers = reports.map((r) => r.accountNumber);
+  if (new Set(numbers).size !== numbers.length) throw new Error("Ten sam rachunek XTB jest w kilku plikach");
+
+  const memo = new Map();
+  const once = (key, load) => (memo.has(key) ? memo.get(key) : memo.set(key, load()).get(key));
+  const imported = [];
+  for (const r of reports) {
+    for (const t of r.trades) {
+      const { currency } = await once(`q|${t.symbol}`, () => quote(t.symbol));
+      const rate = currency === "PLN" ? 1
+        : r.currency === "PLN" && t.cashFx ? t.cashFx // XTB's own conversion, matches the PLN it charged
+        : await once(`fx|${currency}|${t.date}`, () => fx(currency, t.date));
+      // ponytail: commission is in account currency; converted only for PLN accounts (XTB ETF trades are mostly fee-free).
+      const fee = currency === r.currency || r.currency !== "PLN" ? t.feeAccount : t.feeAccount / rate;
+      imported.push({ id: newId(), account: r.account, symbol: t.symbol, side: t.side, date: t.date,
+                      qty: t.qty, price: t.price, fee, currency, fx: rate,
+                      xtb: { account: r.accountNumber, position: t.position } });
+    }
+  }
+
+  const keys = new Set(imported.map((t) => `${t.account}|${t.symbol}`));
+  const replaced = existing.filter((t) => t.xtb && numbers.includes(t.xtb.account));
+  const manual = existing.filter((t) => !t.xtb && keys.has(`${t.account}|${t.symbol}`));
+  const next = [...existing.filter((t) => !replaced.includes(t) && !manual.includes(t)), ...imported];
+  positions(next); // validates sells against holdings
+  return { next, imported, replaced, manual };
+}
+
+const qtyText = (x) => x.toLocaleString("pl-PL", { maximumFractionDigits: 4 });
+
+export function importSummary(reports, { replaced, manual }) {
+  const items = reports.map((r) => {
+    const symbols = [...new Set(r.trades.map((t) => t.symbol))].join(", ") || "brak pozycji";
+    const skipped = r.skipped.length ? ` · pominięte (nie BUY): ${r.skipped.join(", ")}` : "";
+    return `${r.fileName}: ${ACCOUNTS[r.account]}, waluta ${r.currency}, ${r.trades.length} transakcji (${symbols})${skipped}`;
+  });
+  if (replaced.length) items.push(`Zastąpione wcześniej zaimportowane transakcje: ${replaced.length}`);
+  if (manual.length) {
+    items.push(`Usunięte ręczne transakcje tych samych symboli na tych kontach: ${
+      manual.map((t) => `${t.date} ${t.symbol} (${ACCOUNTS[t.account]}) ${qtyText(t.qty)} szt.`).join("; ")}`);
+  }
+  return items;
 }

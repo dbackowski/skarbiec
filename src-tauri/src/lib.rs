@@ -11,22 +11,34 @@ fn data_file(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("skarbiec.json"))
 }
 
-#[tauri::command]
-fn load_data(app: AppHandle) -> Result<String, String> {
-    match fs::read_to_string(data_file(&app)?) {
+// A missing file is an empty portfolio; any other read error is reported, never replaced by
+// empty data (the next save would then overwrite the real file).
+fn read_data(path: &Path) -> Result<String, String> {
+    match fs::read_to_string(path) {
         Ok(s) => Ok(s),
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(r#"{"transactions":[]}"#.into()),
         Err(e) => Err(e.to_string()),
     }
 }
 
-// Write to a temp file and rename, so a crash mid-write never truncates the data.
-#[tauri::command]
-fn save_data(app: AppHandle, data: String) -> Result<(), String> {
-    let path = data_file(&app)?;
+// Rejects anything that is not JSON, then writes to a temp file and renames it, so neither a UI
+// bug nor a crash mid-write can leave a truncated or unreadable data file.
+fn write_data(path: &Path, data: &str) -> Result<(), String> {
+    serde_json::from_str::<serde_json::Value>(data)
+        .map_err(|e| format!("Niepoprawne dane: {e}"))?;
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, data).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, &path).map_err(|e| e.to_string())
+    fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn load_data(app: AppHandle) -> Result<String, String> {
+    read_data(&data_file(&app)?)
+}
+
+#[tauri::command]
+fn save_data(app: AppHandle, data: String) -> Result<(), String> {
+    write_data(&data_file(&app)?, &data)
 }
 
 const KEEP_BACKUPS: usize = 20;
@@ -107,6 +119,54 @@ pub fn run() {
 mod tests {
     use super::*;
 
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("skarbiec-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn missing_file_reads_as_empty_portfolio() {
+        let dir = temp_dir("read");
+        assert_eq!(
+            read_data(&dir.join("skarbiec.json")).unwrap(),
+            r#"{"transactions":[]}"#
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn unreadable_file_is_an_error_not_empty_data() {
+        let dir = temp_dir("unreadable");
+        let path = dir.join("skarbiec.json");
+        fs::create_dir(&path).unwrap(); // a directory where the file should be
+        assert!(read_data(&path).is_err());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_replaces_atomically_and_round_trips() {
+        let dir = temp_dir("write");
+        let path = dir.join("skarbiec.json");
+        write_data(&path, r#"{"transactions":[1]}"#).unwrap();
+        write_data(&path, r#"{"transactions":[2]}"#).unwrap();
+        assert_eq!(read_data(&path).unwrap(), r#"{"transactions":[2]}"#);
+        assert!(!dir.join("skarbiec.json.tmp").exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn invalid_json_never_reaches_the_file() {
+        let dir = temp_dir("invalid");
+        let path = dir.join("skarbiec.json");
+        write_data(&path, r#"{"transactions":[]}"#).unwrap();
+        assert!(write_data(&path, "{\"transactions\": [").is_err());
+        assert!(write_data(&path, "").is_err());
+        assert_eq!(read_data(&path).unwrap(), r#"{"transactions":[]}"#);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn stamp_must_not_change_the_path() {
         assert!(checked_stamp("2026-11-15_12-47-03").is_ok());
@@ -116,8 +176,7 @@ mod tests {
 
     #[test]
     fn prune_keeps_newest_backups_only() {
-        let dir = std::env::temp_dir().join(format!("skarbiec-test-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
+        let dir = temp_dir("prune");
         for s in [
             "2026-01-01_00-00-00",
             "2026-03-01_00-00-00",
