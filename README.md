@@ -107,3 +107,7 @@ src-tauri/                          powłoka Tauri: zapis/odczyt pliku danych, u
 test/                               testy node --test
 design/icon.svg                     źródło ikony (npx tauri icon design/icon.svg)
 ```
+
+## Licencja
+
+[MIT](LICENSE)

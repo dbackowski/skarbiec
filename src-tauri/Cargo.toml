@@ -2,6 +2,7 @@
 name = "skarbiec"
 version = "0.1.0"
 description = "Skarbiec: domowy portfel inwestycyjny"
+license = "MIT"
 edition = "2024"
 
 [lib]
