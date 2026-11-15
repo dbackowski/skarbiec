@@ -1,0 +1,109 @@
+# Skarbiec
+
+Desktopowa aplikacja do śledzenia domowego majątku: ETF-y i akcje (konto zwykłe, IKE, IKZE),
+obligacje skarbowe ROR i konta oszczędnościowe. Wartości są przeliczane na PLN i zebrane na jednym
+dashboardzie. Historię z XTB można zaimportować bezpośrednio z raportu xStation.
+
+Dane zostają na komputerze, w jednym pliku JSON. Aplikacja nie ma kont, serwera ani logowania do brokera.
+
+![Dashboard](docs/screenshots/dashboard.png)
+
+> Zrzuty pokazują dane demonstracyjne z losowymi wartościami.
+
+## Funkcje
+
+**Dashboard.** Łączna wartość i zysk, kafelki per klasa aktywów, podział portfela (zwykłe / IKE / IKZE /
+obligacje / oszczędności) i największe pozycje. Działa w trybie jasnym i ciemnym.
+
+<img src="docs/screenshots/dashboard-dark.png" alt="Dashboard w trybie ciemnym" width="600">
+
+**ETF i akcje.** Transakcje kupna i sprzedaży z podziałem na konta, średnia cena zakupu, zysk w walucie
+instrumentu i w PLN. Każde konto ma osobne pozycje: nie da się sprzedać z IKE jednostek kupionych na zwykłym koncie.
+
+![ETF i akcje](docs/screenshots/etf.png)
+
+**Obligacje ROR.** Odsetki liczone według listu emisyjnego: pierwszy miesiąc stały, potem stopa
+referencyjna NBP plus marża, okresy od dnia zakupu. Tabela pokazuje odsetki wypłacone, narosłe i kwotę przy
+wcześniejszym wykupie (po opłacie 0,50 zł).
+
+![Obligacje](docs/screenshots/bonds.png)
+
+**Oszczędności.** Konta oszczędnościowe i gotówka w PLN, EUR lub USD z szacunkiem narosłych odsetek.
+
+![Oszczędności](docs/screenshots/savings.png)
+
+**Import z XTB.** Przycisk „Import XTB” w nagłówku wczytuje raporty historii z xStation (XLSX, kilka plików
+naraz). Przed zapisem pokazuje podsumowanie zmian.
+
+## Uruchomienie
+
+Wymagania: [Rust](https://rustup.rs) (w tym repo przez asdf, wersja w `.tool-versions`), Node.js
+i Xcode Command Line Tools na macOS.
+
+```sh
+npm install
+npm run tauri dev      # tryb deweloperski
+npm run tauri build    # aplikacja .app / .dmg w src-tauri/target/release/bundle
+npm test               # testy obliczeń (node --test)
+```
+
+## Import z XTB
+
+1. W xStation otwórz **Historię**, ustaw zakres dat od otwarcia rachunku i pobierz raport w formacie Excel.
+   XTB tworzy osobny plik dla każdego rachunku (np. `PLN_…`, `EUR_…`, `IKE_…`, `IKZE_…`).
+2. W Skarbcu kliknij **Import XTB** i zaznacz wszystkie pliki.
+3. Sprawdź podsumowanie i kliknij **Importuj**.
+
+Zasady importu:
+
+- Typ konta i waluta są rozpoznawane z zawartości raportu. Symbole XTB są zamieniane na symbole Yahoo (`.PL` → `.WA`, `.US` → bez końcówki, `.UK` → `.L`).
+- Aktualne pozycje pochodzą z arkusza *Open Positions*, a sprzedaże z *Closed Positions*.
+- Koszt w PLN liczony jest po kursie, który XTB faktycznie pobrało przy zakupie (z *Cash Operations*). Dzięki temu koszt zgadza się z XTB co do grosza.
+- Ponowny import tego samego rachunku zastępuje wcześniej zaimportowane transakcje.
+- Ręczne transakcje tych samych symboli na tym samym koncie są usuwane, żeby nie liczyć ich podwójnie. Podsumowanie pokazuje je przed potwierdzeniem.
+- Nie są importowane: dywidendy, odsetki od wolnych środków, wpłaty i pozycje krótkie (SELL).
+
+## Skąd biorą się liczby
+
+| Co | Źródło / metoda |
+|---|---|
+| Kursy instrumentów | Yahoo Finance (nieoficjalny endpoint `v8/finance/chart`). Cena ostatniej transakcji, więc może się różnić od wyceny XTB, która liczy po cenie sprzedaży (bid). |
+| Kursy walut | NBP, tabela A. Dla transakcji kurs z dnia zakupu, do wyceny kurs bieżący. |
+| Pozycje | Metoda średniej ceny zakupu. PIT-38 wymaga FIFO, więc nie używaj tych liczb do rozliczenia podatku. |
+| Obligacje ROR | List emisyjny 104/2026 i archiwum stóp procentowych NBP. Kwoty przed podatkiem Belki. |
+| Oszczędności | Odsetki proste, dzienne, od ostatnio wpisanego salda, przed podatkiem. Po kapitalizacji wpisz aktualne saldo. |
+
+## Dane i kopia zapasowa
+
+Wszystko jest w jednym pliku:
+
+```
+~/Library/Application Support/pl.local.skarbiec/skarbiec.json
+```
+
+Kopia zapasowa to po prostu kopia tego pliku. Zapis jest atomowy (plik tymczasowy + zmiana nazwy), więc
+awaria w trakcie zapisu nie uszkodzi danych.
+
+## Bezpieczeństwo
+
+- Brak backendu i otwartych portów. Interfejs rozmawia z Rustem przez IPC Tauri.
+- Aplikacja może się łączyć tylko z Yahoo Finance, `api.nbp.pl` i `static.nbp.pl`.
+  Listę dozwolonych adresów definiuje `src-tauri/capabilities/default.json`.
+- Restrykcyjne CSP: tylko lokalne skrypty i style.
+- Dane użytkownika trafiają do DOM wyłącznie przez `textContent`.
+- Brak zależności npm w runtime. Czytnik XLSX korzysta z natywnego `DecompressionStream`.
+- Aplikacja nie przechowuje żadnych danych logowania do XTB, tylko importuje pliki raportów.
+
+## Struktura
+
+```
+src/
+  index.html, styles.css, main.js   interfejs (vanilla JS, bez bundlera)
+  portfolio.js                      pozycje, konta, symbole XTB → Yahoo, oszczędności
+  bonds.js                          obligacje ROR, stopy NBP
+  xlsx.js                           minimalny czytnik XLSX
+  xtb.js                            raport xStation → transakcje
+src-tauri/                          powłoka Tauri: zapis/odczyt pliku danych, uprawnienia
+test/                               testy node --test
+design/icon.svg                     źródło ikony (npx tauri icon design/icon.svg)
+```

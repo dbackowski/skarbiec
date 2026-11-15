@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Main window: core APIs plus HTTP only to quote, FX and NBP rate sources",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://query1.finance.yahoo.com/*" },
+        { "url": "https://api.nbp.pl/*" },
+        { "url": "https://static.nbp.pl/dane/stopy/*" }
+      ]
+    }
+  ]
+}

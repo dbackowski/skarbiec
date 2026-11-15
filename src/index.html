@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="pl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Skarbiec</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script type="module" src="main.js"></script>
+  </head>
+  <body>
+    <header>
+      <h1>Skarbiec</h1>
+      <nav role="tablist">
+        <button type="button" role="tab" data-tab="dashboard">Dashboard</button>
+        <button type="button" role="tab" data-tab="etf">ETF i akcje</button>
+        <button type="button" role="tab" data-tab="bonds">Obligacje</button>
+        <button type="button" role="tab" data-tab="savings">Oszczędności</button>
+      </nav>
+      <button id="xtb-import" type="button" class="secondary" title="Raporty historii z xStation (XLSX, można kilka naraz)">Import XTB</button>
+      <input id="xtb-files" type="file" multiple accept=".xlsx" hidden />
+      <button id="refresh" type="button">Odśwież kursy</button>
+    </header>
+
+    <p id="status" role="status"></p>
+
+    <div id="xtb-preview" class="card" hidden>
+      <h2>Import z XTB</h2>
+      <ul id="xtb-summary"></ul>
+      <button id="xtb-confirm" type="button">Importuj</button>
+      <button id="xtb-cancel" type="button" class="secondary">Anuluj</button>
+    </div>
+
+    <main id="tab-dashboard" role="tabpanel">
+      <div class="hero">
+        <div class="label">Wartość portfela</div>
+        <div id="hero-value" class="hero-value">–</div>
+        <div id="hero-pl"></div>
+      </div>
+
+      <div class="kpis" id="kpis"></div>
+
+      <section class="card">
+        <h2>Podział portfela</h2>
+        <div id="alloc-bar" class="seg-bar" role="img"></div>
+        <ul id="alloc-legend" class="legend"></ul>
+        <table class="compact">
+          <thead><tr><th>Część</th><th>Wartość PLN</th><th>Udział</th><th>Zysk PLN</th></tr></thead>
+          <tbody id="alloc-table"></tbody>
+        </table>
+      </section>
+
+      <section class="card">
+        <h2>Największe pozycje</h2>
+        <div id="top-positions" class="ranked"></div>
+      </section>
+    </main>
+
+    <main id="tab-etf" role="tabpanel" hidden>
+      <p id="accounts"></p>
+      <section>
+        <h2>Pozycje</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Symbol</th><th>Konto</th><th>Ilość</th><th>Śr. cena</th><th>Kurs</th>
+              <th>Wartość</th><th>Zysk/strata</th><th>%</th>
+              <th>Wartość PLN</th><th>Zysk PLN</th>
+            </tr>
+          </thead>
+          <tbody id="positions"></tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Dodaj transakcję</h2>
+        <form id="add">
+          <label>Symbol (Yahoo lub XTB)
+            <input name="symbol" required placeholder="AAPL, CDR.WA lub CDR.PL" autocomplete="off" />
+          </label>
+          <label>Konto
+            <select name="account">
+              <option value="regular">Zwykłe</option><option value="ike">IKE</option><option value="ikze">IKZE</option>
+            </select>
+          </label>
+          <label>Typ
+            <select name="side"><option value="buy">Kupno</option><option value="sell">Sprzedaż</option></select>
+          </label>
+          <label>Data <input name="date" type="date" required /></label>
+          <label>Ilość <input name="qty" type="number" step="any" min="0" required /></label>
+          <label>Cena (waluta instrumentu) <input name="price" type="number" step="any" min="0" required /></label>
+          <label>Prowizja <input name="fee" type="number" step="any" min="0" value="0" /></label>
+          <button type="submit">Dodaj</button>
+        </form>
+      </section>
+
+      <section>
+        <h2>Transakcje</h2>
+        <table>
+          <thead>
+            <tr><th>Data</th><th>Symbol</th><th>Konto</th><th>Typ</th><th>Ilość</th><th>Cena</th><th>Prowizja</th><th>Kurs NBP</th><th></th></tr>
+          </thead>
+          <tbody id="transactions"></tbody>
+        </table>
+      </section>
+    </main>
+
+    <main id="tab-bonds" role="tabpanel" hidden>
+      <section>
+        <h2>Obligacje roczne (ROR)</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Seria</th><th>Szt.</th><th>Zakup</th><th>Wykup</th><th>Okres</th><th>Oproc.</th>
+              <th>Odsetki wypłacone</th><th>Narosłe</th><th>Wartość</th><th>Wykup dziś</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="bonds"></tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Dodaj obligacje</h2>
+        <form id="add-bond">
+          <label>Seria <input name="series" required placeholder="ROR1127" autocomplete="off" /></label>
+          <label>Data zakupu <input name="date" type="date" required /></label>
+          <label>Liczba (po 100 zł) <input name="qty" type="number" step="1" min="1" required /></label>
+          <label>Oproc. 1. miesiąca % <input name="firstRate" type="number" step="0.01" min="0" required /></label>
+          <label>Marża % <input name="margin" type="number" step="0.01" min="0" value="0" /></label>
+          <button type="submit">Dodaj obligacje</button>
+        </form>
+      </section>
+    </main>
+    <main id="tab-savings" role="tabpanel" hidden>
+      <section>
+        <h2>Konta oszczędnościowe i gotówka</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Nazwa</th><th>Oproc.</th><th>Saldo</th><th>Saldo z dnia</th><th>Narosłe (szac.)</th>
+              <th>Odsetki / mies.</th><th>Wartość PLN</th><th>Nowe saldo</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="savings"></tbody>
+        </table>
+        <p class="hint">Odsetki liczone dziennie od ostatnio wpisanego salda, przed podatkiem. Po wypłacie odsetek lub wpłacie wpisz aktualne saldo.</p>
+      </section>
+
+      <section>
+        <h2>Dodaj konto</h2>
+        <form id="add-savings">
+          <label>Nazwa <input name="name" required placeholder="Trade Republic" autocomplete="off" /></label>
+          <label>Waluta
+            <select name="currency"><option>PLN</option><option>EUR</option><option>USD</option></select>
+          </label>
+          <label>Saldo <input name="balance" type="number" step="0.01" min="0" required /></label>
+          <label>Oprocentowanie % rocznie <input name="rate" type="number" step="0.01" min="0" required /></label>
+          <button type="submit">Dodaj konto</button>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>
