@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { addMonths, ror, parseNbpRefRates } from "../src/bonds.js";
+import { addMonths, maturityReminders, ror, parseNbpRefRates } from "../src/bonds.js";
 
 test("periods clamp to month end like the list emisyjny table", () => {
   const ends = [1, 2, 3, 4].map((k) => addMonths("2026-11-30", k));
@@ -33,6 +33,16 @@ test("matured bond has no value left", () => {
   const r = ror(bond, rates, "2027-11-15");
   assert.equal(r.matured, true);
   assert.equal(r.value, 0);
+});
+
+test("maturity reminders: within 30 days or already matured, soonest first", () => {
+  const bonds = [
+    { series: "ROR0128", qty: 5, date: "2027-01-20" }, // matures 2028-01-20, far away
+    { series: "ROR1227", qty: 3, date: "2026-12-10" }, // matures 2027-12-10, 25 days
+    { series: "ROR1027", qty: 2, date: "2026-10-01" }, // matured 2027-10-01
+  ];
+  assert.deepEqual(maturityReminders(bonds, "2027-11-15").map((r) => [r.series, r.daysLeft]),
+    [["ROR1027", -45], ["ROR1227", 25]]);
 });
 
 test("parses NBP XML", () => {

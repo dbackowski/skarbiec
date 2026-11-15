@@ -73,6 +73,17 @@ export function ror(bond, refRates, asOf) {
   };
 }
 
+// Bonds maturing within `days` from asOf, or already matured (still listed, worth 0).
+export function maturityReminders(bonds, asOf, days = 30) {
+  return bonds
+    .map((b) => {
+      const maturity = addMonths(b.date, 12);
+      return { series: b.series, qty: b.qty, maturity, daysLeft: daysBetween(asOf, maturity) };
+    })
+    .filter((r) => r.daysLeft <= days)
+    .sort((a, b) => a.maturity.localeCompare(b.maturity));
+}
+
 // Parses https://static.nbp.pl/dane/stopy/stopy_procentowe_archiwum.xml (reference rate only).
 export function parseNbpRefRates(xml) {
   const out = [];

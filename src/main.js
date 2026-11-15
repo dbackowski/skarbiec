@@ -1,5 +1,5 @@
 import { ACCOUNTS, positions, savings, yahooSymbol } from "./portfolio.js";
-import { ror, parseNbpRefRates } from "./bonds.js";
+import { maturityReminders, ror, parseNbpRefRates } from "./bonds.js";
 import { readXlsx } from "./xlsx.js";
 import { parseXtbReport } from "./xtb.js";
 
@@ -144,9 +144,9 @@ function render() {
     return tr;
   }));
 
-  const bondRows = renderBonds();
+  const { counted: bondRows, unpriced: bondsUnpriced } = renderBonds();
   const savingRows = renderSavings();
-  const missing = rows.filter((r) => r.valuePln == null).length + data.bonds.length - bondRows.length
+  const missing = rows.filter((r) => r.valuePln == null).length + bondsUnpriced
     + data.savings.length - savingRows.length;
   const parts = allocation(rows, bondRows, savingRows);
   renderDashboard(rows, parts, missing);
@@ -196,7 +196,22 @@ function allocation(rows, bondRows, savingRows) {
   ].map((x, i) => ({ ...x, slot: i + 1 }));
 }
 
+function renderReminders() {
+  const items = maturityReminders(data.bonds, today()).map((r) => {
+    const amount = `${money.format(r.qty * 100)} zł`;
+    if (r.daysLeft > 0) {
+      return `${r.series} (${r.qty} szt.): wykup ${r.maturity}, za ${r.daysLeft} ${r.daysLeft === 1 ? "dzień" : "dni"}. `
+        + `Wróci ${amount} plus odsetki za ostatni miesiąc. Zdecyduj, czy wypłacić, czy zamienić na nową serię.`;
+    }
+    if (r.daysLeft === 0) return `${r.series} (${r.qty} szt.): wykup dzisiaj, ${amount} plus odsetki za ostatni miesiąc.`;
+    return `${r.series} (${r.qty} szt.): wykupiona ${r.maturity}. Możesz ją usunąć z zakładki Obligacje.`;
+  });
+  $("#reminders-list").replaceChildren(...items.map((text) => el("li", { textContent: text })));
+  $("#reminders").hidden = !items.length;
+}
+
 function renderDashboard(rows, parts, missing) {
+  renderReminders();
   const total = sum(parts, (x) => x.value);
   const pl = sum(parts, (x) => x.pl);
   const cost = sum(parts, (x) => x.cost);
@@ -255,10 +270,12 @@ function renderDashboard(rows, parts, missing) {
   if (!top.length) $("#top-positions").textContent = "Brak pozycji z kursem.";
 }
 
-// Renders the bonds table; returns rows that count toward the PLN total.
+// Renders the bonds table; returns rows that count toward the PLN total and how many bonds
+// could not be valued (no NBP rates yet). Matured bonds are worth 0, not unpriced.
 function renderBonds() {
   const dash = "–";
   const counted = [];
+  let unpriced = 0;
   const bonds = [...data.bonds].sort((a, b) => b.date.localeCompare(a.date));
   $("#bonds").replaceChildren(...bonds.map((b) => {
     const tr = document.createElement("tr");
@@ -268,7 +285,8 @@ function renderBonds() {
     } catch (e) {
       status(e.message, true);
     }
-    if (r && !r.matured) counted.push({ valuePln: r.value, plPln: r.paid + r.accrued, cost: b.qty * 100 });
+    if (!r) unpriced++;
+    else if (!r.matured) counted.push({ valuePln: r.value, plPln: r.paid + r.accrued, cost: b.qty * 100 });
     tr.append(
       cell(b.series), cell(num.format(b.qty)), cell(b.date), cell(r ? r.maturity : dash),
       cell(r ? (r.matured ? "wykupiona" : `${r.current.period}/12`) : dash),
@@ -281,7 +299,7 @@ function renderBonds() {
     );
     return tr;
   }));
-  return counted;
+  return { counted, unpriced };
 }
 
 // Renders the savings table; returns rows that count toward the PLN total.
@@ -437,8 +455,23 @@ async function previewXtb(e) {
   }
 }
 
+// Local "YYYY-MM-DD_HH-MM-SS" for backup file names.
+const stamp = () => new Date().toLocaleString("sv-SE").replace(" ", "_").replaceAll(":", "-");
+
+async function exportData() {
+  try {
+    await saving; // include writes still in flight
+    status(`Zapisano kopię danych: ${await invoke("export_data", { stamp: stamp() })}`);
+  } catch (err) {
+    status(`Nie udało się zapisać kopii: ${err.message ?? err}`, true);
+  }
+}
+
 async function confirmXtb() {
   try {
+    await saving;
+    // No backup, no import: the import replaces transactions.
+    await invoke("backup_data", { stamp: stamp() });
     await persist({ transactions: pendingImport });
   } catch (err) {
     return status(`Import XTB: ${err.message ?? err}`, true);
@@ -521,6 +554,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#add-bond").addEventListener("submit", addBond);
   $("#add-savings").addEventListener("submit", addSavings);
   $("#xtb-import").addEventListener("click", () => $("#xtb-files").click());
+  $("#export").addEventListener("click", exportData);
   $("#xtb-files").addEventListener("change", previewXtb);
   $("#xtb-confirm").addEventListener("click", confirmXtb);
   $("#xtb-cancel").addEventListener("click", () => { pendingImport = null; $("#xtb-preview").hidden = true; status(""); });

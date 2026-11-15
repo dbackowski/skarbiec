@@ -13,7 +13,8 @@ Dane zostają na komputerze, w jednym pliku JSON. Aplikacja nie ma kont, serwera
 ## Funkcje
 
 **Dashboard.** Łączna wartość i zysk, kafelki per klasa aktywów, podział portfela (zwykłe / IKE / IKZE /
-obligacje / oszczędności) i największe pozycje. Działa w trybie jasnym i ciemnym.
+obligacje / oszczędności) i największe pozycje. Przypomina o obligacjach, których wykup wypada w ciągu
+30 dni, i o już wykupionych. Działa w trybie jasnym i ciemnym.
 
 <img src="docs/screenshots/dashboard-dark.png" alt="Dashboard w trybie ciemnym" width="600">
 
@@ -81,8 +82,16 @@ Wszystko jest w jednym pliku:
 ~/Library/Application Support/pl.local.skarbiec/skarbiec.json
 ```
 
-Kopia zapasowa to po prostu kopia tego pliku. Zapis jest atomowy (plik tymczasowy + zmiana nazwy), więc
-awaria w trakcie zapisu nie uszkodzi danych.
+Zapis jest atomowy (plik tymczasowy + zmiana nazwy), więc awaria w trakcie zapisu nie uszkodzi danych.
+W tym samym pliku zapisywane są ostatnio pobrane kursy, żeby aplikacja działała bez połączenia.
+
+Kopie zapasowe:
+
+- **Automatycznie przed każdym importem z XTB** w `pl.local.skarbiec/backups/`. Zostaje 20 najnowszych kopii.
+  Jeśli kopii nie da się zrobić, import zostaje przerwany.
+- **Ręcznie** przyciskiem „Eksportuj kopię”, który zapisuje `skarbiec-kopia-<data>.json` w folderze Pobrane.
+
+Przywracanie: zamknij aplikację i skopiuj wybraną kopię w miejsce `skarbiec.json`.
 
 ## Bezpieczeństwo
 

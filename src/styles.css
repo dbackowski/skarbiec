@@ -63,7 +63,7 @@ td button { background: transparent; color: var(--down); border-color: var(--lin
 nav { display: flex; gap: 4px; flex: 1; }
 nav button { background: transparent; border-color: transparent; color: var(--muted); }
 nav button[aria-selected="true"] { background: var(--card); border-color: var(--line); color: var(--fg); font-weight: 600; }
-#xtb-import { margin-left: auto; }
+#export { margin-left: auto; }
 header button.secondary { padding: 5px 8px; }
 
 /* Dashboard */
@@ -108,3 +108,6 @@ td button.secondary { color: var(--accent); }
 .hint { color: var(--muted); font-size: 12px; }
 #xtb-preview ul { padding-left: 18px; }
 #xtb-preview li { margin: 4px 0; }
+.reminders { border-color: var(--s4); margin-bottom: 16px; }
+.reminders ul { margin: 0; padding-left: 18px; }
+.reminders li { margin: 4px 0; }

@@ -16,6 +16,7 @@
         <button type="button" role="tab" data-tab="bonds">Obligacje</button>
         <button type="button" role="tab" data-tab="savings">Oszczędności</button>
       </nav>
+      <button id="export" type="button" class="secondary" title="Zapisuje kopię pliku danych w folderze Pobrane">Eksportuj kopię</button>
       <button id="xtb-import" type="button" class="secondary" title="Raporty historii z xStation (XLSX, można kilka naraz)">Import XTB</button>
       <input id="xtb-files" type="file" multiple accept=".xlsx" hidden />
       <button id="refresh" type="button">Odśwież kursy</button>
@@ -36,6 +37,11 @@
         <div id="hero-value" class="hero-value">–</div>
         <div id="hero-pl"></div>
       </div>
+
+      <section id="reminders" class="card reminders" hidden>
+        <h2>Przypomnienia</h2>
+        <ul id="reminders-list"></ul>
+      </section>
 
       <div class="kpis" id="kpis"></div>
 
