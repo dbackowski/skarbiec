@@ -31,7 +31,7 @@ test("positions are split per account; selling is checked per account", () => {
   const ps = positions([buyIke, buyReg]);
   assert.deepEqual(ps.map((p) => [p.account, p.qty]), [["ike", 3], ["regular", 1]]);
   assert.throws(() => positions([buyIke, buyReg,
-    tx({ side: "sell", date: "2024-02-01", qty: 2, price: 11 })]), /Zwykłe/);
+    tx({ side: "sell", date: "2024-02-01", qty: 2, price: 11 })]), /Maklerskie/);
 });
 
 test("savings accrue simple daily interest since the balance date", () => {
@@ -46,4 +46,21 @@ test("XTB symbols map to Yahoo", () => {
   assert.equal(yahooSymbol("IWDA.UK"), "IWDA.L");
   assert.equal(yahooSymbol("VWCE.DE"), "VWCE.DE");
   assert.equal(yahooSymbol("CDR.WA"), "CDR.WA");
+});
+
+test("Finax (Bloomberg-style) symbols map to Yahoo, Germany to XETRA", () => {
+  assert.equal(yahooSymbol("IS3N.GR"), "IS3N.DE");
+  assert.equal(yahooSymbol("xsx6.gr"), "XSX6.DE");
+  assert.equal(yahooSymbol("SXR8.GY"), "SXR8.DE");
+  assert.equal(yahooSymbol("VUSA.LN"), "VUSA.L");
+  assert.equal(yahooSymbol("IWDA.NA"), "IWDA.AS");
+  assert.equal(yahooSymbol("CW8.FP"), "CW8.PA");
+  assert.equal(yahooSymbol("SWDA.IM"), "SWDA.MI");
+  assert.equal(yahooSymbol("ETFBW20TR.PW"), "ETFBW20TR.WA");
+});
+
+test("OIPE is its own account: no selling OIPE units from IKE", () => {
+  const buy = tx({ account: "oipe", side: "buy", date: "2026-01-01", qty: 2, price: 45 });
+  assert.deepEqual(positions([buy]).map((p) => [p.account, p.qty]), [["oipe", 2]]);
+  assert.throws(() => positions([buy, tx({ account: "ike", side: "sell", date: "2026-02-01", qty: 1, price: 50 })]), /IKE/);
 });

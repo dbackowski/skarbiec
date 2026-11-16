@@ -12,7 +12,10 @@
       <h1>Skarbiec</h1>
       <nav role="tablist">
         <button type="button" role="tab" data-tab="dashboard">Dashboard</button>
-        <button type="button" role="tab" data-tab="etf">ETF i akcje</button>
+        <button type="button" role="tab" data-tab="regular">Maklerskie</button>
+        <button type="button" role="tab" data-tab="ike">IKE</button>
+        <button type="button" role="tab" data-tab="ikze">IKZE</button>
+        <button type="button" role="tab" data-tab="oipe">OIPE</button>
         <button type="button" role="tab" data-tab="bonds">Obligacje</button>
         <button type="button" role="tab" data-tab="savings">Oszczędności</button>
       </nav>
@@ -61,32 +64,35 @@
       </section>
     </main>
 
-    <main id="tab-etf" role="tabpanel" hidden>
-      <p id="accounts"></p>
+    <!-- Account tabs (Maklerskie, IKE, IKZE, OIPE) are created from this template by main.js. -->
+    <template id="account-template">
+      <section class="account-head">
+        <p class="account-summary"></p>
+        <div class="limit" hidden>
+          <div class="limit-label"></div>
+          <div class="meter"><div class="meter-fill"></div></div>
+        </div>
+      </section>
+
       <section>
         <h2>Pozycje</h2>
         <table>
           <thead>
             <tr>
-              <th>Symbol</th><th>Konto</th><th>Ilość</th><th>Śr. cena</th><th>Kurs</th>
+              <th>Symbol</th><th>Ilość</th><th>Śr. cena</th><th>Kurs</th>
               <th>Wartość</th><th>Zysk/strata</th><th>%</th>
               <th>Wartość PLN</th><th>Zysk PLN</th>
             </tr>
           </thead>
-          <tbody id="positions"></tbody>
+          <tbody class="positions"></tbody>
         </table>
       </section>
 
       <section>
         <h2>Dodaj transakcję</h2>
-        <form id="add">
-          <label>Symbol (Yahoo lub XTB)
-            <input name="symbol" required placeholder="AAPL, CDR.WA lub CDR.PL" autocomplete="off" />
-          </label>
-          <label>Konto
-            <select name="account">
-              <option value="regular">Zwykłe</option><option value="ike">IKE</option><option value="ikze">IKZE</option>
-            </select>
+        <form class="add-tx">
+          <label>Symbol (Yahoo, XTB lub Finax)
+            <input name="symbol" required placeholder="AAPL, CDR.PL, IS3N.GR" autocomplete="off" />
           </label>
           <label>Typ
             <select name="side"><option value="buy">Kupno</option><option value="sell">Sprzedaż</option></select>
@@ -101,14 +107,50 @@
 
       <section>
         <h2>Transakcje</h2>
-        <table>
+        <table class="tx-table">
           <thead>
-            <tr><th>Data</th><th>Symbol</th><th>Konto</th><th>Typ</th><th>Ilość</th><th>Cena</th><th>Prowizja</th><th>Kurs NBP</th><th></th></tr>
+            <tr><th>Data</th><th>Symbol</th><th>Typ</th><th>Ilość</th><th>Cena</th><th>Prowizja</th><th>Kurs NBP</th><th></th></tr>
           </thead>
-          <tbody id="transactions"></tbody>
+          <tbody class="transactions"></tbody>
         </table>
       </section>
-    </main>
+
+      <div class="two-col">
+        <section>
+          <h2>Gotówka na koncie</h2>
+          <table class="compact">
+            <thead><tr><th>Waluta</th><th>Kwota</th><th>Wartość PLN</th><th></th></tr></thead>
+            <tbody class="cash"></tbody>
+          </table>
+          <form class="add-cash">
+            <label>Waluta
+              <select name="currency"><option>PLN</option><option>EUR</option><option>USD</option><option>GBP</option></select>
+            </label>
+            <label>Kwota <input name="amount" type="number" step="0.01" min="0" required /></label>
+            <button type="submit">Zapisz</button>
+          </form>
+          <p class="hint">Wpisz aktualne saldo wolnej gotówki; zapis dla tej samej waluty je zastępuje.</p>
+        </section>
+
+        <section class="deposits-section">
+          <h2>Wpłaty</h2>
+          <table class="compact">
+            <thead><tr><th>Data</th><th>Kwota PLN</th><th></th></tr></thead>
+            <tbody class="deposits"></tbody>
+          </table>
+          <form class="add-deposit">
+            <label>Data <input name="date" type="date" required /></label>
+            <label>Kwota PLN <input name="amount" type="number" step="0.01" min="0.01" required /></label>
+            <button type="submit">Dodaj wpłatę</button>
+          </form>
+          <form class="set-limit">
+            <label><span class="limit-name">Limit</span> <input name="limit" type="number" step="0.01" min="0" required /></label>
+            <button type="submit" class="secondary">Zapisz limit</button>
+          </form>
+          <p class="hint">Z wpisanymi wpłatami wynik konta = wartość pozycji + gotówka − wpłaty, tak jak liczy broker.</p>
+        </section>
+      </div>
+    </template>
 
     <main id="tab-bonds" role="tabpanel" hidden>
       <section>

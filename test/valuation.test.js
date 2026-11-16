@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  allocation, portfolio, refreshMessage, reminderTexts, valueBonds, valuePositions, valueSavings,
+  accountSummary, allocation, limitFor, portfolio, refreshMessage, reminderTexts, valueBonds, valuePositions, valueSavings,
 } from "../src/valuation.js";
 
 const close = (a, b, msg) => assert.ok(Math.abs(a - b) < 0.005, `${msg ?? ""} ${a} != ${b}`);
 const tx = (o) => ({ account: "regular", side: "buy", fee: 0, fx: 1, currency: "PLN", ...o });
+const SEED_TXS = [{ account: "regular", side: "buy", fee: 0, fx: 1, currency: "PLN", symbol: "A", qty: 10, price: 10, date: "2026-01-01" }];
 const rates = [{ from: "2025-01-01", rate: 5.75 }, { from: "2025-12-04", rate: 4.0 }, { from: "2026-03-05", rate: 3.75 }];
 
 test("EUR position: PLN result includes the currency gain since purchase", () => {
@@ -73,16 +74,70 @@ test("savings: EUR account valued at today's rate, unknown currency is not count
   assert.equal(v.rows[2].valuePln, null);
 });
 
-test("allocation: fixed slots per part, sums per account", () => {
-  const p = (account, valuePln, plPln, costPln) => ({ p: { account, costPln }, valuePln, plPln });
+test("allocation: fixed slots per part, OIPE last so existing colors stay", () => {
+  const acc = (key, value, pl, cost) => ({ key, value, pl, cost });
   const parts = allocation(
-    [p("regular", 100, 10, 90), p("ike", 200, 20, 180), p("ike", 50, -5, 55), p("ikze", null, null, 10)],
+    [acc("regular", 100, 10, 90), acc("ike", 250, 15, 235), acc("ikze", 0, 0, 0), acc("oipe", 1000, 100, 900)],
     [{ valuePln: 1000, plPln: 3, cost: 1000 }],
     [{ valuePln: 500, plPln: 1, cost: 499 }]);
-  assert.deepEqual(parts.map((x) => [x.key, x.slot, x.value, x.pl, x.cost]), [
-    ["regular", 1, 100, 10, 90], ["ike", 2, 250, 15, 235], ["ikze", 3, 0, 0, 0],
-    ["bonds", 4, 1000, 3, 1000], ["savings", 5, 500, 1, 499],
+  assert.deepEqual(parts.map((x) => [x.key, x.label, x.slot, x.value, x.pl, x.cost]), [
+    ["regular", "Maklerskie", 1, 100, 10, 90], ["ike", "IKE", 2, 250, 15, 235], ["ikze", "IKZE", 3, 0, 0, 0],
+    ["bonds", "Obligacje", 4, 1000, 3, 1000], ["savings", "Oszczędności", 5, 500, 1, 499],
+    ["oipe", "OIPE", 6, 1000, 100, 900],
   ]);
+});
+
+// The Finax case: ETFs bought for EUR, part of the EUR still in cash, PLN deposits known.
+const oipeData = {
+  transactions: [tx({ account: "oipe", symbol: "ETF.DE", qty: 100, price: 60, currency: "EUR", fx: 4.4, date: "2026-10-29" })],
+  cash: [{ id: "c1", account: "oipe", currency: "EUR", amount: 65 }, { id: "c2", account: "ike", currency: "PLN", amount: 10 }],
+  deposits: [{ id: "d1", account: "oipe", date: "2026-10-20", amount: 26500 }, { id: "d2", account: "oipe", date: "2025-12-01", amount: 1000 }],
+};
+const oipeRows = () => valuePositions(oipeData.transactions, { "ETF.DE": { price: 61 } }, { PLN: 1, EUR: 4.4 });
+
+test("account with deposits: result = positions + cash - deposits (like the broker)", () => {
+  const a = accountSummary("oipe", oipeRows(), oipeData, { PLN: 1, EUR: 4.4 }, "2026-11-15");
+  close(a.positionsValue, 6100 * 4.4);
+  close(a.cashValue, 65 * 4.4);
+  close(a.value, 26840 + 286);
+  close(a.depositsTotal, 27500);
+  assert.equal(a.byDeposits, true);
+  close(a.cost, 27500);
+  close(a.pl, 27126 - 27500);
+  assert.deepEqual([a.year, a.depositsYear, a.limit], ["2026", 26500, 28260]);
+  assert.deepEqual(a.deposits.map((d) => d.id), ["d1", "d2"]); // newest first
+  assert.equal(a.missing, 0);
+});
+
+test("account without deposits: result from purchase cost, cash adds value but no result", () => {
+  const rows = valuePositions(SEED_TXS, { A: { price: 12 } }, { PLN: 1 });
+  const a = accountSummary("regular", rows, { cash: [{ account: "regular", currency: "PLN", amount: 50 }] }, { PLN: 1 }, "2026-11-15");
+  assert.equal(a.byDeposits, false);
+  close(a.value, 120 + 50);
+  close(a.cost, 100 + 50);
+  close(a.pl, 20);
+  assert.equal(a.limit, null); // no limit for the regular account
+});
+
+test("account: cash in a currency without a rate is missing, not zero", () => {
+  const a = accountSummary("ike", [], { cash: [{ account: "ike", currency: "CHF", amount: 5 }] }, { PLN: 1 }, "2026-11-15");
+  assert.equal(a.missing, 1);
+  assert.equal(a.value, 0);
+});
+
+test("limits: OIPE default per year, user override wins, unknown year has none", () => {
+  assert.equal(limitFor({}, "2026", "oipe"), 28260);
+  assert.equal(limitFor({ 2026: { oipe: 30000 } }, "2026", "oipe"), 30000);
+  assert.equal(limitFor(undefined, "2031", "oipe"), null);
+  assert.equal(limitFor({}, "2026", "ike"), null); // XTB accounts: no deposits, no limit bar
+});
+
+test("deposits count only on OIPE; anything stored for other accounts is ignored", () => {
+  const rows = valuePositions(SEED_TXS, { A: { price: 12 } }, { PLN: 1 });
+  const a = accountSummary("regular", rows, { deposits: [{ account: "regular", date: "2026-01-01", amount: 50 }] }, { PLN: 1 }, "2026-11-15");
+  assert.equal(a.byDeposits, false);
+  assert.deepEqual(a.deposits, []);
+  close(a.pl, 20);
 });
 
 test("portfolio: totals, cost and missing count across all asset types", () => {
@@ -98,6 +153,18 @@ test("portfolio: totals, cost and missing count across all asset types", () => {
   close(pf.pl, 20 + 1.4);
   close(pf.cost, 100 + 1000 + 1000);
   assert.equal(pf.missing, 2); // NOQUOTE + CHF savings
+  assert.deepEqual(pf.accounts.map((a) => a.key), ["regular", "ike", "ikze", "oipe"]);
+});
+
+test("portfolio: account cash and deposits flow into the dashboard parts and totals", () => {
+  const pf = portfolio({ ...oipeData, bonds: [], savings: [] },
+    { quotes: { "ETF.DE": { price: 61 } }, fx: { PLN: 1, EUR: 4.4 }, refRates: null }, "2026-11-15");
+  const oipe = pf.parts.find((p) => p.key === "oipe");
+  close(oipe.value, 27126);
+  close(oipe.pl, -374);
+  close(oipe.cost, 27500);
+  close(pf.parts.find((p) => p.key === "ike").value, 10); // IKE cash only
+  close(pf.total, 27136);
 });
 
 test("reminder texts for upcoming, today and matured bonds", () => {

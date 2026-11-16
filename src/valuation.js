@@ -56,35 +56,80 @@ export function valueSavings(accounts, fx, asOf) {
   return { rows, counted: rows.filter((r) => r.valuePln != null) };
 }
 
+// Accounts where the user records deposits. Only OIPE: Finax has no export and converts PLN to EUR
+// at its own rate, so deposits are the only way to get its real cost. XTB accounts get exact costs
+// from the import.
+export const DEPOSIT_ACCOUNTS = ["oipe"];
+
+// Yearly OIPE contribution limit in PLN (3x the forecast average wage). Update every year;
+// a limit saved by the user in data.limits takes precedence.
+export const LIMITS = {
+  2026: { oipe: 28260 },
+};
+
+export function limitFor(userLimits, year, account) {
+  return userLimits?.[year]?.[account] ?? LIMITS[year]?.[account] ?? null;
+}
+
+// One investment account: positions, free cash and (OIPE only) deposits.
+// With deposits recorded, the result is what a broker shows: value (positions + cash) - deposits,
+// which includes its real FX conversion, fees and cash. Without deposits it falls back to the
+// purchase cost of the positions (cash counts at its current value, so it adds no result).
+export function accountSummary(key, positionRows, data, fx, asOf) {
+  const rows = positionRows.filter((r) => r.p.account === key);
+  const priced = rows.filter((r) => r.valuePln != null);
+  const cash = (data.cash ?? []).filter((c) => c.account === key)
+    .map((c) => ({ ...c, valuePln: fx[c.currency] ? c.amount * fx[c.currency] : null }));
+  const deposits = DEPOSIT_ACCOUNTS.includes(key)
+    ? (data.deposits ?? []).filter((d) => d.account === key).sort((a, b) => b.date.localeCompare(a.date))
+    : [];
+  const positionsValue = sum(priced, (r) => r.valuePln);
+  const cashValue = sum(cash.filter((c) => c.valuePln != null), (c) => c.valuePln);
+  const value = positionsValue + cashValue;
+  const depositsTotal = sum(deposits, (d) => d.amount);
+  const byDeposits = deposits.length > 0;
+  const cost = byDeposits ? depositsTotal : sum(priced, (r) => r.p.costPln) + cashValue;
+  const year = asOf.slice(0, 4);
+  return {
+    key, label: ACCOUNTS[key], rows, cash, deposits,
+    positionsValue, cashValue, value, depositsTotal, cost, pl: value - cost, byDeposits,
+    year, depositsYear: sum(deposits.filter((d) => d.date.startsWith(year)), (d) => d.amount),
+    limit: limitFor(data.limits, year, key),
+    missing: rows.length - priced.length + cash.filter((c) => c.valuePln == null).length,
+  };
+}
+
 // Fixed part order = fixed color slot per part (color follows the entity, not its rank).
-export function allocation(positionRows, bondRows, savingRows) {
-  const priced = positionRows.filter((r) => r.valuePln != null);
+// OIPE came later and takes the next slot at the end, so existing parts keep their colors;
+// this order is also the one the palette was validated in (adjacent pairs).
+export function allocation(accounts, bondRows, savingRows) {
+  const acc = (key) => {
+    const a = accounts.find((x) => x.key === key);
+    return { key, label: ACCOUNTS[key], value: a?.value ?? 0, pl: a?.pl ?? 0, cost: a?.cost ?? 0 };
+  };
   return [
-    ...Object.entries(ACCOUNTS).map(([key, label]) => {
-      const rs = priced.filter((r) => r.p.account === key);
-      return { key, label: `ETF i akcje · ${label}`, value: sum(rs, (r) => r.valuePln),
-               pl: sum(rs, (r) => r.plPln), cost: sum(rs, (r) => r.p.costPln) };
-    }),
+    acc("regular"), acc("ike"), acc("ikze"),
     { key: "bonds", label: "Obligacje", value: sum(bondRows, (r) => r.valuePln),
       pl: sum(bondRows, (r) => r.plPln), cost: sum(bondRows, (r) => r.cost) },
     { key: "savings", label: "Oszczędności", value: sum(savingRows, (r) => r.valuePln),
       pl: sum(savingRows, (r) => r.plPln), cost: sum(savingRows, (r) => r.cost) },
+    acc("oipe"),
   ].map((x, i) => ({ ...x, slot: i + 1 }));
 }
 
-// Everything the dashboard shows, from the stored data and the market data in memory.
+// Everything the screens show, from the stored data and the market data in memory.
 export function portfolio(data, market, asOf) {
   const positionRows = valuePositions(data.transactions, market.quotes, market.fx);
+  const accounts = Object.keys(ACCOUNTS).map((key) => accountSummary(key, positionRows, data, market.fx, asOf));
   const bonds = valueBonds(data.bonds, market.refRates, asOf);
   const cash = valueSavings(data.savings, market.fx, asOf);
-  const parts = allocation(positionRows, bonds.counted, cash.counted);
+  const parts = allocation(accounts, bonds.counted, cash.counted);
   return {
-    positionRows, bonds, cash, parts,
+    positionRows, accounts, bonds, cash, parts,
     total: sum(parts, (x) => x.value),
     pl: sum(parts, (x) => x.pl),
     cost: sum(parts, (x) => x.cost),
-    missing: positionRows.filter((r) => r.valuePln == null).length + bonds.unpriced
-      + cash.rows.length - cash.counted.length,
+    missing: sum(accounts, (a) => a.missing) + bonds.unpriced + cash.rows.length - cash.counted.length,
   };
 }
 

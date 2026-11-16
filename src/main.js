@@ -1,14 +1,15 @@
 // UI glue: DOM, events and persistence. All calculations live in the imported modules.
 import { ACCOUNTS, positions, yahooSymbol } from "./portfolio.js";
 import { fetchFx, fetchQuote, fetchRefRates } from "./market.js";
-import { portfolio, refreshMessage, reminderTexts } from "./valuation.js";
+import { DEPOSIT_ACCOUNTS, portfolio, refreshMessage, reminderTexts } from "./valuation.js";
 import { readXlsx } from "./xlsx.js";
 import { buildImport, importSummary, parseXtbReport } from "./xtb.js";
 
 const { invoke } = window.__TAURI__.core;
 const httpFetch = (...args) => window.__TAURI__.http.fetch(...args);
 
-let data = { transactions: [], bonds: [], savings: [] };
+const EMPTY = { transactions: [], bonds: [], savings: [], cash: [], deposits: [], limits: {} };
+let data = { ...EMPTY };
 // Last fetched market data, also saved in the data file (data.cache) so the app shows the
 // last known values when offline. `at` = ISO time of the fetch.
 const market = { quotes: {}, fx: { PLN: 1 }, fxAt: {}, refRates: null, refRatesAt: null };
@@ -70,14 +71,51 @@ function deleteButton(onConfirm) {
 
 function render() {
   const pf = portfolio(data, market, today());
+  for (const acc of pf.accounts) renderAccount(acc);
+  renderBonds(pf.bonds);
+  renderSavings(pf.cash);
+  renderDashboard(pf);
+}
 
-  $("#positions").replaceChildren(...pf.positionRows.map(({ p, q, value, valuePln, pl, plPln }) => el("tr", {},
+const panel = (key) => document.getElementById(`tab-${key}`);
+
+function renderAccount(acc) {
+  const tab = panel(acc.key);
+  const q = (sel) => tab.querySelector(sel);
+
+  const result = `${money.format(acc.pl)} PLN${acc.cost ? ` (${pct(acc.pl / acc.cost)})` : ""}`;
+  q(".account-summary").replaceChildren(
+    `Wartość: ${money.format(acc.value)} PLN`,
+    acc.cashValue ? ` (pozycje ${money.format(acc.positionsValue)} + gotówka ${money.format(acc.cashValue)})` : "",
+    acc.byDeposits ? ` · Wpłaty: ${money.format(acc.depositsTotal)} PLN · Wynik: ` : " · Zysk z pozycji: ",
+    el("span", { className: sign(acc.pl), textContent: result }),
+    acc.missing ? ` · bez kursu: ${acc.missing}` : "",
+  );
+
+  const limited = DEPOSIT_ACCOUNTS.includes(acc.key);
+  if (limited) q(".limit").hidden = !acc.limit;
+  if (limited) {
+    q(".limit-name").textContent = `Limit wpłat ${acc.year} (PLN)`;
+    const input = q(".set-limit [name=limit]");
+    if (document.activeElement !== input) input.value = acc.limit ?? "";
+  }
+  if (limited && acc.limit) {
+    const over = acc.depositsYear - acc.limit;
+    q(".limit-label").replaceChildren(
+      `Wpłaty w ${acc.year}: ${money.format(acc.depositsYear)} z ${money.format(acc.limit)} zł (${pct(acc.depositsYear / acc.limit)})`,
+      over > 0.005 ? el("span", { className: "down", textContent: ` · przekroczono limit o ${money.format(over)} zł` }) : "",
+    );
+    const fill = q(".meter-fill");
+    fill.style.width = `${Math.min(100, (acc.depositsYear / acc.limit) * 100)}%`;
+    fill.classList.toggle("over", over > 0.005);
+  }
+
+  q(".positions").replaceChildren(...acc.rows.map(({ p, q: quote, value, valuePln, pl, plPln }) => el("tr", {},
     cell(p.symbol),
-    cell(ACCOUNTS[p.account]),
     cell(num.format(p.qty)),
     cell(`${money.format(p.cost / p.qty)} ${p.currency}`),
-    Object.assign(cell(q ? `${money.format(q.price)}${fresh.has(`q:${p.symbol}`) ? "" : " *"}` : dash),
-                  { title: q?.at ? `Kurs z ${fmtTime(q.at)}` : "" }),
+    Object.assign(cell(quote ? `${money.format(quote.price)}${fresh.has(`q:${p.symbol}`) ? "" : " *"}` : dash),
+                  { title: quote?.at ? `Kurs z ${fmtTime(quote.at)}` : "" }),
     cell(value != null ? money.format(value) : dash),
     cell(pl != null ? money.format(pl) : dash, sign(pl)),
     cell(pl != null ? pct(pl / p.cost) : dash, sign(pl)),
@@ -85,13 +123,9 @@ function render() {
     cell(plPln != null ? money.format(plPln) : dash, sign(plPln)),
   )));
 
-  $("#accounts").textContent = pf.parts.filter((x) => x.key in ACCOUNTS && x.value > 0)
-    .map((x) => `${ACCOUNTS[x.key]}: ${money.format(x.value)} PLN (zysk ${money.format(x.pl)})`).join(" · ");
-
-  const txs = [...data.transactions].sort((a, b) => b.date.localeCompare(a.date));
-  $("#transactions").replaceChildren(...txs.map((t) => el("tr", {},
-    cell(t.date), cell(t.symbol), cell(ACCOUNTS[t.account] + (t.xtb ? " · XTB" : "")),
-    cell(t.side === "buy" ? "Kupno" : "Sprzedaż"),
+  const txs = data.transactions.filter((t) => t.account === acc.key).sort((a, b) => b.date.localeCompare(a.date));
+  q(".transactions").replaceChildren(...txs.map((t) => el("tr", {},
+    cell(t.date), cell(t.symbol), cell((t.side === "buy" ? "Kupno" : "Sprzedaż") + (t.xtb ? " · XTB" : "")),
     cell(num.format(t.qty)), cell(`${money.format(t.price)} ${t.currency}`),
     cell(money.format(t.fee)), cell(num.format(t.fx)),
     deleteButton(async () => {
@@ -101,9 +135,15 @@ function render() {
     }),
   )));
 
-  renderBonds(pf.bonds);
-  renderSavings(pf.cash);
-  renderDashboard(pf);
+  q(".cash").replaceChildren(...acc.cash.map((c) => el("tr", {},
+    cell(c.currency), cell(money.format(c.amount)), cell(c.valuePln != null ? money.format(c.valuePln) : dash),
+    deleteButton(() => persist({ cash: data.cash.filter((x) => x.id !== c.id) })),
+  )));
+
+  q(".deposits")?.replaceChildren(...acc.deposits.map((d) => el("tr", {},
+    cell(d.date), cell(money.format(d.amount)),
+    deleteButton(() => persist({ deposits: data.deposits.filter((x) => x.id !== d.id) })),
+  )));
 }
 
 function renderDashboard(pf) {
@@ -128,10 +168,10 @@ function renderDashboard(pf) {
     el("div", { className: "value", textContent: value }),
     el("div", { className: `sub ${cls}`, textContent: sub }));
   $("#kpis").replaceChildren(
-    tile("ETF i akcje", `${money.format(etfValue)} PLN`, `zysk ${money.format(etfPl)} PLN`, sign(etfPl)),
+    tile("Konta inwestycyjne", `${money.format(etfValue)} PLN`, `wynik ${money.format(etfPl)} PLN`, sign(etfPl)),
     tile("Obligacje", `${money.format(bonds.value)} PLN`, `odsetki ${money.format(bonds.pl)} PLN`, sign(bonds.pl)),
     tile("Oszczędności", `${money.format(cash.value)} PLN`, `narosłe odsetki ${money.format(cash.pl)} PLN`, sign(cash.pl)),
-    tile("Wpłacony kapitał", `${money.format(pf.cost)} PLN`, "koszt zakupu otwartych pozycji"),
+    tile("Wpłacony kapitał", `${money.format(pf.cost)} PLN`, "wpłaty lub koszt zakupu otwartych pozycji"),
   );
 
   // Tall segmented bar: one whole split into parts; zero parts draw nothing.
@@ -208,7 +248,7 @@ function renderSavings({ rows }) {
 
 async function refresh() {
   const open = positions(data.transactions).filter((p) => p.qty > 1e-9);
-  const currencies = [...new Set([...open, ...data.savings].map((p) => p.currency))].filter((c) => c !== "PLN");
+  const currencies = [...new Set([...open, ...data.savings, ...data.cash].map((p) => p.currency))].filter((c) => c !== "PLN");
   const now = new Date().toISOString();
   fresh = new Set();
   status("Pobieranie kursów…");
@@ -318,7 +358,7 @@ async function addTransaction(e) {
     status(`Sprawdzanie ${symbol}…`);
     const q = await fetchQuote(httpFetch, symbol);
     const fx = await fetchFx(httpFetch, q.currency, date);
-    const account = f.get("account");
+    const account = form.dataset.account;
     if (!(account in ACCOUNTS)) throw new Error("Nieznany typ konta");
     const tx = { id: crypto.randomUUID(), account, symbol, side: f.get("side"), date, qty, price, fee, currency: q.currency, fx };
     positions([...data.transactions, tx]); // throws on overselling
@@ -327,12 +367,84 @@ async function addTransaction(e) {
     fresh.add(`q:${symbol}`);
     form.reset();
     form.date.value = today();
-    form.account.value = account; // keep the account for the next entry
     await refresh();
   } catch (err) {
     status(err.message ?? String(err), true);
   } finally {
     button.disabled = false;
+  }
+}
+
+async function setCash(e) {
+  e.preventDefault();
+  const form = e.target;
+  const account = form.closest("[data-account]").dataset.account;
+  const currency = form.currency.value;
+  const amount = Number(form.amount.value);
+  if (form.amount.value === "" || !(amount >= 0)) return status("Kwota gotówki musi być ≥ 0", true);
+  const others = data.cash.filter((c) => !(c.account === account && c.currency === currency));
+  try {
+    await persist({ cash: amount > 0 ? [...others, { id: crypto.randomUUID(), account, currency, amount }] : others });
+    form.amount.value = "";
+    await refresh();
+  } catch (err) {
+    status(err.message ?? String(err), true);
+  }
+}
+
+async function addDeposit(e) {
+  e.preventDefault();
+  const form = e.target;
+  const account = form.closest("[data-account]").dataset.account;
+  const amount = Number(form.amount.value);
+  const date = form.date.value;
+  if (!(amount > 0)) return status("Kwota wpłaty musi być > 0", true);
+  if (date > today()) return status("Data z przyszłości", true);
+  try {
+    await persist({ deposits: [...data.deposits, { id: crypto.randomUUID(), account, date, amount }] });
+    form.amount.value = "";
+    render();
+  } catch (err) {
+    status(err.message ?? String(err), true);
+  }
+}
+
+async function setLimit(e) {
+  e.preventDefault();
+  const form = e.target;
+  const account = form.closest("[data-account]").dataset.account;
+  const limit = Number(form.limit.value);
+  if (!(limit > 0)) return status("Limit musi być > 0", true);
+  const year = today().slice(0, 4);
+  try {
+    await persist({ limits: { ...data.limits, [year]: { ...data.limits[year], [account]: limit } } });
+    status(`Zapisano limit ${ACCOUNTS[account]} na ${year}: ${money.format(limit)} zł`);
+    render();
+  } catch (err) {
+    status(err.message ?? String(err), true);
+  }
+}
+
+// One tab per investment account, cloned from the template.
+function createAccountTabs() {
+  const template = $("#account-template");
+  for (const key of Object.keys(ACCOUNTS)) {
+    const main = el("main", { id: `tab-${key}`, hidden: true });
+    main.setAttribute("role", "tabpanel");
+    main.dataset.account = key;
+    main.append(template.content.cloneNode(true));
+    const add = main.querySelector(".add-tx");
+    add.dataset.account = key;
+    add.addEventListener("submit", addTransaction);
+    main.querySelector(".add-cash").addEventListener("submit", setCash);
+    if (DEPOSIT_ACCOUNTS.includes(key)) {
+      main.querySelector(".add-deposit").addEventListener("submit", addDeposit);
+      main.querySelector(".set-limit").addEventListener("submit", setLimit);
+    } else {
+      main.querySelector(".deposits-section").remove(); // deposits and limits only where they matter
+      main.querySelector(".limit").remove();
+    }
+    $("#tab-bonds").before(main);
   }
 }
 
@@ -385,11 +497,11 @@ function showTab(name) {
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
+  createAccountTabs();
   for (const b of document.querySelectorAll("[data-tab]")) b.addEventListener("click", () => showTab(b.dataset.tab));
   let tab = "dashboard";
   try { tab = localStorage.getItem("tab") ?? tab; } catch {}
   showTab(document.querySelector(`[data-tab="${tab}"]`) ? tab : "dashboard");
-  $("#add").addEventListener("submit", addTransaction);
   $("#add-bond").addEventListener("submit", addBond);
   $("#add-savings").addEventListener("submit", addSavings);
   $("#xtb-import").addEventListener("click", () => $("#xtb-files").click());
@@ -398,12 +510,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#xtb-confirm").addEventListener("click", confirmXtb);
   $("#xtb-cancel").addEventListener("click", () => { pendingImport = null; $("#xtb-preview").hidden = true; status(""); });
   $("#refresh").addEventListener("click", refresh);
-  for (const form of [$("#add"), $("#add-bond")]) {
-    form.date.value = today();
-    form.date.max = today();
+  for (const input of document.querySelectorAll("form [name=date]")) {
+    input.value = today();
+    input.max = today();
   }
   try {
-    data = { transactions: [], bonds: [], savings: [], ...JSON.parse(await invoke("load_data")) };
+    data = { ...EMPTY, ...JSON.parse(await invoke("load_data")) };
     for (const t of data.transactions) t.account ??= "regular"; // pre-account data
     const cache = data.cache ?? {};
     Object.assign(market.quotes, cache.quotes);

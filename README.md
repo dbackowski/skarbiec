@@ -2,7 +2,7 @@
 
 [![Testy](https://github.com/dbackowski/skarbiec/actions/workflows/testy.yml/badge.svg)](https://github.com/dbackowski/skarbiec/actions/workflows/testy.yml)
 
-Desktopowa aplikacja do śledzenia domowego majątku: ETF-y i akcje (konto zwykłe, IKE, IKZE),
+Desktopowa aplikacja do śledzenia domowego majątku: ETF-y i akcje na kontach maklerskich, IKE, IKZE i OIPE,
 obligacje skarbowe ROR i konta oszczędnościowe. Wartości są przeliczane na PLN i zebrane na jednym
 dashboardzie. Historię z XTB można zaimportować bezpośrednio z raportu xStation.
 
@@ -14,16 +14,35 @@ Dane zostają na komputerze, w jednym pliku JSON. Aplikacja nie ma kont, serwera
 
 ## Funkcje
 
-**Dashboard.** Łączna wartość i zysk, kafelki per klasa aktywów, podział portfela (zwykłe / IKE / IKZE /
-obligacje / oszczędności) i największe pozycje. Przypomina o obligacjach, których wykup wypada w ciągu
+**Dashboard.** Łączna wartość i zysk, kafelki per klasa aktywów, podział portfela (Maklerskie / IKE / IKZE /
+obligacje / oszczędności / OIPE) i największe pozycje. Przypomina o obligacjach, których wykup wypada w ciągu
 30 dni, i o już wykupionych. Działa w trybie jasnym i ciemnym.
 
 <img src="docs/screenshots/dashboard-dark.png" alt="Dashboard w trybie ciemnym" width="600">
 
-**ETF i akcje.** Transakcje kupna i sprzedaży z podziałem na konta, średnia cena zakupu, zysk w walucie
-instrumentu i w PLN. Każde konto ma osobne pozycje: nie da się sprzedać z IKE jednostek kupionych na zwykłym koncie.
+**Konta inwestycyjne: Maklerskie, IKE, IKZE i OIPE.** Każde konto ma własną zakładkę:
 
-![ETF i akcje](docs/screenshots/etf.png)
+- pozycje ze średnią ceną zakupu i zyskiem w walucie instrumentu oraz w PLN,
+- transakcje kupna i sprzedaży; formularz w zakładce dodaje do tego konta,
+- wolną gotówkę w dowolnej walucie; powiększa wartość konta.
+
+Pozycje są rozdzielone między konta: nie da się sprzedać z IKE jednostek kupionych na koncie maklerskim.
+Symbol można wpisać tak, jak pokazuje go broker: w formacie Yahoo (`CDR.WA`), XTB (`CDR.PL`) albo Finax
+(`IS3N.GR` → `IS3N.DE`).
+
+**OIPE (Finax).** Finax nie ma eksportu, więc transakcje z listy na stronie Finax wpisuje się ręcznie w zakładce
+OIPE: ticker, data, liczba jednostek i cena w EUR. Finax sam wymienia złotówki na euro po swoim kursie, dlatego
+OIPE ma dodatkowo:
+
+- wpłaty w PLN: wynik konta liczy się wtedy tak jak w Finax: wartość pozycji + gotówka − wpłaty, i zgadza się
+  z Finax z dokładnością do kursu euro, po którym Finax wycenia portfel,
+- wolną gotówkę w EUR, której Finax jeszcze nie zainwestował,
+- pasek wykorzystania rocznego limitu wpłat (2026: 28 260 zł; limit można zmienić w zakładce).
+
+Wynik pojedynczych ETF-ów w tabeli pozycji jest przybliżony (koszt po kursie NBP z dnia transakcji). Konta
+z XTB nie potrzebują wpłat: import bierze kurs wymiany, po którym XTB faktycznie przewalutował złotówki.
+
+![Zakładka OIPE](docs/screenshots/konto.png)
 
 **Obligacje ROR.** Odsetki liczone według listu emisyjnego: pierwszy miesiąc stały, potem stopa
 referencyjna NBP plus marża, okresy od dnia zakupu. Tabela pokazuje odsetki wypłacone, narosłe i kwotę przy

@@ -87,7 +87,7 @@ const SEED = {
   savings: [{ id: "s1", name: "Konto", currency: "PLN", balance: 1000, rate: 0, since: "2026-11-01" }],
 };
 const MARKET = {
-  quotes: { "CDR.WA": [120, "PLN"], "VWCE.DE": [110, "EUR"], "PKO.WA": [50, "PLN"], "EUNL.DE": [95, "EUR"] },
+  quotes: { "CDR.WA": [120, "PLN"], "VWCE.DE": [110, "EUR"], "PKO.WA": [50, "PLN"], "EUNL.DE": [95, "EUR"], "IS3N.DE": [45, "EUR"] },
   fx: { EUR: 4.4, "EUR|2026-11-03": 4.3 },
   nbpXml: NBP_XML,
 };
@@ -117,73 +117,168 @@ test("dashboard: totals, tiles, allocation and top positions from all asset type
   assert.deepEqual(await page.$$eval("#kpis .value", (els) => els.map((e) => e.textContent)),
     ["6040,00 PLN", "1001,40 PLN", "1000,00 PLN", "7000,00 PLN"]);
   assert.deepEqual(await app.rows("#alloc-table"), [
-    ["ETF i akcje · Zwykłe", "1200,00", "14,92%", "200,00"],
-    ["ETF i akcje · IKE", "4840,00", "60,19%", "840,00"],
+    ["Maklerskie", "1200,00", "14,92%", "200,00"],
+    ["IKE", "4840,00", "60,19%", "840,00"],
     ["Obligacje", "1001,40", "12,45%", "1,40"],
     ["Oszczędności", "1000,00", "12,44%", "0,00"],
   ]);
-  assert.deepEqual(await page.$$eval(".rank-name", (els) => els.map((e) => e.textContent)), ["VWCE.DE · IKE", "CDR.WA · Zwykłe"]);
+  assert.deepEqual(await page.$$eval(".rank-name", (els) => els.map((e) => e.textContent)), ["VWCE.DE · IKE", "CDR.WA · Maklerskie"]);
   assert.equal(await page.isHidden("#reminders"), true);
   assert.deepEqual(app.errors, []);
   await app.close();
 });
 
-test("ETF tab: positions in instrument currency and PLN, per-account summary, transactions", async () => {
-  const app = await open({}, { tab: "etf" });
-  assert.deepEqual(await app.rows("#positions"), [
-    ["CDR.WA", "Zwykłe", "10", "100,00 PLN", "120,00", "1200,00", "200,00", "20,00%", "1200,00", "200,00"],
-    ["VWCE.DE", "IKE", "10", "100,00 EUR", "110,00", "1100,00", "100,00", "10,00%", "4840,00", "840,00"],
+const tabRows = (app, key, part) => app.rows(`#tab-${key} .${part}`);
+const form = (key, cls) => `#tab-${key} .${cls}`;
+
+test("account tabs: each shows only its positions and transactions, summary from purchase cost", async () => {
+  const app = await open({}, { tab: "regular" });
+  assert.deepEqual(await tabRows(app, "regular", "positions"), [
+    ["CDR.WA", "10", "100,00 PLN", "120,00", "1200,00", "200,00", "20,00%", "1200,00", "200,00"],
   ]);
-  assert.equal(await app.page.textContent("#accounts"), "Zwykłe: 1200,00 PLN (zysk 200,00) · IKE: 4840,00 PLN (zysk 840,00)");
-  assert.equal((await app.rows("#transactions")).length, 2);
+  assert.equal(await app.page.textContent("#tab-regular .account-summary"), "Wartość: 1200,00 PLN · Zysk z pozycji: 200,00 PLN (20,00%)");
+  for (const key of ["regular", "ike", "ikze"]) { // deposits and limits exist only on OIPE
+    assert.equal(await app.page.locator(`#tab-${key} :is(.limit, .deposits-section)`).count(), 0, key);
+  }
+  assert.equal(await app.page.locator("#tab-oipe :is(.limit, .deposits-section)").count(), 2);
+
+  await app.page.click("[data-tab=ike]");
+  assert.deepEqual(await tabRows(app, "ike", "positions"), [
+    ["VWCE.DE", "10", "100,00 EUR", "110,00", "1100,00", "100,00", "10,00%", "4840,00", "840,00"],
+  ]);
+  assert.deepEqual((await tabRows(app, "ike", "transactions")).map((r) => r.slice(0, 3)), [["2026-02-10", "VWCE.DE", "Kupno"]]);
+  assert.deepEqual(app.errors, []);
   await app.close();
 });
 
-test("add transaction: XTB symbol mapped, currency from quote, NBP rate of the trade date", async () => {
-  const app = await open({}, { tab: "etf" });
+test("add transaction: goes to the tab's account; XTB symbol mapped; NBP rate of the trade date", async () => {
+  const app = await open({}, { tab: "ikze" });
   const { page } = app;
-  await page.fill("#add [name=symbol]", "eunl.de");
-  await page.selectOption("#add [name=account]", "ikze");
-  await page.fill("#add [name=date]", "2026-11-03");
-  await page.fill("#add [name=qty]", "2");
-  await page.fill("#add [name=price]", "90");
-  await page.click("#add button[type=submit]");
-  await page.waitForFunction(() => document.querySelectorAll("#positions tr").length === 3);
+  const f = form("ikze", "add-tx");
+  await page.fill(`${f} [name=symbol]`, "eunl.de");
+  await page.fill(`${f} [name=date]`, "2026-11-03");
+  await page.fill(`${f} [name=qty]`, "2");
+  await page.fill(`${f} [name=price]`, "90");
+  await page.click(`${f} button[type=submit]`);
+  await page.waitForFunction(() => document.querySelectorAll("#tab-ikze .positions tr").length === 1);
   const tx = (await app.saved()).transactions.at(-1);
   assert.deepEqual({ ...tx, id: undefined },
     { id: undefined, account: "ikze", symbol: "EUNL.DE", side: "buy", date: "2026-11-03", qty: 2, price: 90, fee: 0, currency: "EUR", fx: 4.3 });
-  assert.equal(await page.inputValue("#add [name=account]"), "ikze"); // kept for the next entry
 
-  await page.fill("#add [name=symbol]", "pko.pl");
-  await page.fill("#add [name=qty]", "1");
-  await page.fill("#add [name=price]", "50");
-  await page.click("#add button[type=submit]");
-  await page.waitForFunction(() => document.querySelectorAll("#positions tr").length === 4);
-  assert.equal((await app.saved()).transactions.at(-1).symbol, "PKO.WA");
+  await page.click("[data-tab=regular]");
+  const r = form("regular", "add-tx");
+  await page.fill(`${r} [name=symbol]`, "pko.pl");
+  await page.fill(`${r} [name=qty]`, "1");
+  await page.fill(`${r} [name=price]`, "50");
+  await page.click(`${r} button[type=submit]`);
+  await page.waitForFunction(() => document.querySelectorAll("#tab-regular .positions tr").length === 2);
+  assert.deepEqual((await app.saved()).transactions.at(-1).symbol, "PKO.WA");
+  assert.equal((await app.saved()).transactions.at(-1).account, "regular");
+  await app.close();
+});
+
+test("OIPE: Finax ticker, EUR cash and PLN deposits give the broker's result; limit bar", async () => {
+  const app = await open({}, { tab: "oipe" });
+  const { page } = app;
+  const f = form("oipe", "add-tx");
+  await page.fill(`${f} [name=symbol]`, "IS3N.GR");
+  await page.fill(`${f} [name=date]`, "2026-11-03");
+  await page.fill(`${f} [name=qty]`, "10");
+  await page.fill(`${f} [name=price]`, "40");
+  await page.click(`${f} button[type=submit]`);
+  await page.waitForFunction(() => document.querySelectorAll("#tab-oipe .positions tr").length === 1);
+  const tx = (await app.saved()).transactions.at(-1);
+  assert.deepEqual([tx.account, tx.symbol, tx.currency, tx.fx], ["oipe", "IS3N.DE", "EUR", 4.3]);
+  // Without deposits: cost 400 EUR x 4.30 = 1720 PLN; value 450 EUR x 4.40 = 1980 PLN
+  assert.equal(await page.textContent("#tab-oipe .account-summary"), "Wartość: 1980,00 PLN · Zysk z pozycji: 260,00 PLN (15,12%)");
+
+  await page.selectOption(`${form("oipe", "add-cash")} [name=currency]`, "EUR");
+  await page.fill(`${form("oipe", "add-cash")} [name=amount]`, "10");
+  await page.click(`${form("oipe", "add-cash")} button`);
+  await page.waitForFunction(() => document.querySelectorAll("#tab-oipe .cash tr").length === 1);
+  await page.fill(`${form("oipe", "add-deposit")} [name=date]`, "2026-11-02");
+  await page.fill(`${form("oipe", "add-deposit")} [name=amount]`, "1800");
+  await page.click(`${form("oipe", "add-deposit")} button`);
+  await page.waitForFunction(() => document.querySelectorAll("#tab-oipe .deposits tr").length === 1);
+
+  // 1980 + 10 EUR x 4.40 = 2024; result vs 1800 deposited
+  assert.equal(await page.textContent("#tab-oipe .account-summary"),
+    "Wartość: 2024,00 PLN (pozycje 1980,00 + gotówka 44,00) · Wpłaty: 1800,00 PLN · Wynik: 224,00 PLN (12,44%)");
+  assert.deepEqual(await tabRows(app, "oipe", "cash"), [["EUR", "10,00", "44,00", "Usuń"]]);
+  assert.equal(await page.textContent("#tab-oipe .limit-label"), "Wpłaty w 2026: 1800,00 z 28\u00a0260,00 zł (6,37%)");
+
+  await page.click("[data-tab=dashboard]");
+  assert.deepEqual((await app.rows("#alloc-table")).at(-1), ["OIPE", "2024,00", "20,11%", "224,00"]);
+  assert.equal(await page.getAttribute("#alloc-bar .seg:last-child", "class"), "seg s6");
+  assert.equal(await page.textContent("#hero-value"), "10\u00a0065,40 PLN"); // Polish group separator: no-break space
+  await app.close();
+});
+
+test("cash: saving a currency again replaces it, 0 removes it, delete works", async () => {
+  const app = await open({}, { tab: "ike" });
+  const { page } = app;
+  const f = form("ike", "add-cash");
+  const setCash = async (currency, amount) => {
+    await page.selectOption(`${f} [name=currency]`, currency);
+    await page.fill(`${f} [name=amount]`, amount);
+    await page.click(`${f} button`);
+    await page.waitForFunction(() => !/Pobieranie/.test(document.querySelector("#status").textContent));
+  };
+  await setCash("PLN", "100");
+  await setCash("EUR", "5");
+  await setCash("PLN", "250");
+  assert.deepEqual((await app.saved()).cash.map((c) => [c.account, c.currency, c.amount]), [["ike", "EUR", 5], ["ike", "PLN", 250]]);
+  await setCash("EUR", "0");
+  assert.deepEqual((await app.saved()).cash.map((c) => c.currency), ["PLN"]);
+  await page.locator("#tab-ike .cash button").click();
+  await page.locator("#tab-ike .cash button").click();
+  await page.waitForFunction(() => document.querySelectorAll("#tab-ike .cash tr").length === 0);
+  assert.deepEqual((await app.saved()).cash, []);
+  await app.close();
+});
+
+test("OIPE limit: over-limit warning, user override; last year's deposits not counted", async () => {
+  const data = structuredClone(SEED);
+  data.deposits = [{ id: "d1", account: "oipe", date: "2026-02-01", amount: 30000 },
+                   { id: "d2", account: "oipe", date: "2025-12-20", amount: 5000 }];
+  const app = await open({ data }, { tab: "oipe" });
+  const { page } = app;
+  assert.equal(await page.textContent("#tab-oipe .limit-label"),
+    "Wpłaty w 2026: 30\u00a0000,00 z 28\u00a0260,00 zł (106,16%) · przekroczono limit o 1740,00 zł");
+  assert.equal(await page.getAttribute("#tab-oipe .meter-fill", "class"), "meter-fill over");
+
+  await page.fill(`${form("oipe", "set-limit")} [name=limit]`, "40000");
+  await page.click(`${form("oipe", "set-limit")} button`);
+  await page.waitForFunction(() => /Zapisano limit/.test(document.querySelector("#status").textContent));
+  assert.deepEqual((await app.saved()).limits, { 2026: { oipe: 40000 } });
+  assert.equal(await page.textContent("#tab-oipe .limit-label"), "Wpłaty w 2026: 30\u00a0000,00 z 40\u00a0000,00 zł (75,00%)");
+  assert.equal(await page.getAttribute("#tab-oipe .meter-fill", "class"), "meter-fill");
   await app.close();
 });
 
 test("add transaction: selling more than held is refused and nothing is saved", async () => {
-  const app = await open({}, { tab: "etf" });
+  const app = await open({}, { tab: "regular" });
   const { page } = app;
-  await page.fill("#add [name=symbol]", "CDR.WA");
-  await page.selectOption("#add [name=side]", "sell");
-  await page.fill("#add [name=qty]", "11");
-  await page.fill("#add [name=price]", "130");
-  await page.click("#add button[type=submit]");
+  const f = form("regular", "add-tx");
+  await page.fill(`${f} [name=symbol]`, "CDR.WA");
+  await page.selectOption(`${f} [name=side]`, "sell");
+  await page.fill(`${f} [name=qty]`, "11");
+  await page.fill(`${f} [name=price]`, "130");
+  await page.click(`${f} button[type=submit]`);
   await page.waitForFunction(() => document.querySelector("#status").className === "error");
-  assert.match(await app.status(), /CDR\.WA \(Zwykłe\): sprzedaż 11 szt\. .*posiadane tylko 10/);
+  assert.match(await app.status(), /CDR\.WA \(Maklerskie\): sprzedaż 11 szt\. .*posiadane tylko 10/);
   assert.equal((await app.saved()).transactions.length, 2);
   await app.close();
 });
 
 test("add transaction: unknown symbol is reported", async () => {
-  const app = await open({}, { tab: "etf" });
+  const app = await open({}, { tab: "regular" });
   const { page } = app;
-  await page.fill("#add [name=symbol]", "NOPE");
-  await page.fill("#add [name=qty]", "1");
-  await page.fill("#add [name=price]", "1");
-  await page.click("#add button[type=submit]");
+  const f = form("regular", "add-tx");
+  await page.fill(`${f} [name=symbol]`, "NOPE");
+  await page.fill(`${f} [name=qty]`, "1");
+  await page.fill(`${f} [name=price]`, "1");
+  await page.click(`${f} button[type=submit]`);
   await page.waitForFunction(() => document.querySelector("#status").className === "error");
   assert.match(await app.status(), /Nie udało się pobrać notowań NOPE \(HTTP 404/);
   assert.equal((await app.saved()).transactions.length, 2);
@@ -193,9 +288,9 @@ test("add transaction: unknown symbol is reported", async () => {
 test("delete needs two clicks; deleting a buy that a sell depends on is refused", async () => {
   const data = structuredClone(SEED);
   data.transactions.push({ id: "t3", account: "regular", symbol: "CDR.WA", side: "sell", date: "2026-05-01", qty: 4, price: 150, fee: 0, currency: "PLN", fx: 1 });
-  const app = await open({ data }, { tab: "etf" });
+  const app = await open({ data }, { tab: "regular" });
   const { page } = app;
-  const button = (date) => page.locator("#transactions tr", { hasText: date }).locator("button");
+  const button = (date) => page.locator("#tab-regular .transactions tr", { hasText: date }).locator("button");
 
   await button("2026-01-10").click();
   assert.equal(await button("2026-01-10").textContent(), "Na pewno?");
@@ -205,7 +300,7 @@ test("delete needs two clicks; deleting a buy that a sell depends on is refused"
 
   await button("2026-05-01").click();
   await button("2026-05-01").click();
-  await page.waitForFunction(() => document.querySelectorAll("#transactions tr").length === 2);
+  await page.waitForFunction(() => document.querySelectorAll("#tab-regular .transactions tr").length === 1);
   assert.deepEqual((await app.saved()).transactions.map((t) => t.id), ["t1", "t2"]);
   await app.close();
 });
@@ -293,9 +388,9 @@ test("refresh saves market data; offline start shows it marked as cached", async
   const file = await online.saved();
   await online.close();
 
-  const app = await open({ data: file, offline: true }, { tab: "etf" });
+  const app = await open({ data: file, offline: true }, { tab: "ike" });
   assert.equal(await app.status(), "Brak połączenia, nic nie udało się odświeżyć. Pokazuję zapisane dane z 15.11.2026, 12:00 (oznaczone *).");
-  assert.deepEqual((await app.rows("#positions")).map((r) => [r[4], r[8]]), [["120,00 *", "1200,00"], ["110,00 *", "4840,00"]]);
+  assert.deepEqual((await tabRows(app, "ike", "positions")).map((r) => [r[3], r[7]]), [["110,00 *", "4840,00"]]);
   assert.equal(await app.page.textContent("#hero-value"), "8041,40 PLN");
   await app.close();
 });
@@ -309,14 +404,14 @@ test("offline without saved data: values missing, nothing invented", async () =>
 test("XTB import: preview, backup before saving, positions from the reports", async () => {
   const data = structuredClone(SEED);
   data.transactions.push({ id: "m1", account: "ike", symbol: "VWCE.DE", side: "buy", date: "2026-09-25", qty: 4, price: 110, fee: 0, currency: "EUR", fx: 4.4 });
-  const app = await open({ data, fx: { EUR: 4.4, "EUR|2026-02-02": 4.2, "EUR|2026-06-01": 4.25, "EUR|2026-03-10": 4.3 } }, { tab: "etf" });
+  const app = await open({ data, fx: { EUR: 4.4, "EUR|2026-02-02": 4.2, "EUR|2026-06-01": 4.25, "EUR|2026-03-10": 4.3 } }, { tab: "dashboard" });
   const { page } = app;
   await page.setInputFiles("#xtb-files", [
     `${FIXTURES}IKE_11111111_2026-01-01_2026-11-15.xlsx`, `${FIXTURES}EUR_22222222_2026-01-01_2026-11-15.xlsx`]);
   await page.waitForSelector("#xtb-preview:not([hidden])");
   assert.deepEqual(await page.$$eval("#xtb-summary li", (els) => els.map((e) => e.textContent)), [
     "IKE_11111111_2026-01-01_2026-11-15.xlsx: IKE, waluta PLN, 3 transakcji (VWCE.DE)",
-    "EUR_22222222_2026-01-01_2026-11-15.xlsx: Zwykłe, waluta EUR, 1 transakcji (EUNL.DE)",
+    "EUR_22222222_2026-01-01_2026-11-15.xlsx: Maklerskie, waluta EUR, 1 transakcji (EUNL.DE)",
     "Usunięte ręczne transakcje tych samych symboli na tych kontach: 2026-02-10 VWCE.DE (IKE) 10 szt.; 2026-09-25 VWCE.DE (IKE) 4 szt.",
   ]);
   assert.equal((await app.saved()).transactions.length, 3); // nothing saved before confirming
@@ -330,14 +425,13 @@ test("XTB import: preview, backup before saving, positions from the reports", as
   assert.deepEqual(saved.transactions.filter((t) => !t.xtb).map((t) => t.id), ["t1"]);
   assert.equal(saved.transactions.filter((t) => t.xtb).length, 4);
   // VWCE.DE on IKE: 4 still open + 2 bought and sold = 4
-  assert.deepEqual((await app.rows("#positions")).map((r) => r.slice(0, 3)), [
-    ["CDR.WA", "Zwykłe", "10"], ["EUNL.DE", "Zwykłe", "10"], ["VWCE.DE", "IKE", "4"],
-  ]);
+  assert.deepEqual((await tabRows(app, "regular", "positions")).map((r) => r.slice(0, 2)), [["CDR.WA", "10"], ["EUNL.DE", "10"]]);
+  assert.deepEqual((await tabRows(app, "ike", "positions")).map((r) => r.slice(0, 2)), [["VWCE.DE", "4"]]);
   await app.close();
 });
 
 test("XTB import: cancel saves nothing; a wrong file is reported", async () => {
-  const app = await open({}, { tab: "etf" });
+  const app = await open({}, { tab: "ike" });
   const { page } = app;
   await page.setInputFiles("#xtb-files", `${FIXTURES}IKE_11111111_2026-01-01_2026-11-15.xlsx`);
   await page.waitForSelector("#xtb-preview:not([hidden])");
@@ -363,7 +457,9 @@ test("unreadable data file: forms are disabled so nothing can overwrite it", asy
   const app = await open({ loadError: true });
   await app.page.waitForFunction(() => document.querySelector("#status").className === "error");
   assert.equal(await app.status(), "Nie udało się wczytać danych: permission denied");
-  assert.deepEqual(await app.page.$$eval("form button", (bs) => bs.map((b) => b.disabled)), [true, true, true]);
+  const disabled = await app.page.$$eval("form button", (bs) => bs.map((b) => b.disabled));
+  assert.equal(disabled.length, 4 + 3 * 2 + 2); // OIPE 4 forms, other accounts 2, bonds, savings
+  assert.ok(disabled.every(Boolean));
   const state = await app.page.evaluate(() => window.__state);
   assert.ok(!state.invokes.includes("save_data"));
   await app.close();

@@ -142,5 +142,5 @@ test("import: rejects the same account twice and sells without holdings", async 
 test("import summary lists skipped short positions", () => {
   const items = importSummary([{ fileName: "f.xlsx", account: "regular", currency: "PLN", trades: [], skipped: ["US500 SELL"] }],
     { replaced: [], manual: [] });
-  assert.deepEqual(items, ["f.xlsx: Zwykłe, waluta PLN, 0 transakcji (brak pozycji) · pominięte (nie BUY): US500 SELL"]);
+  assert.deepEqual(items, ["f.xlsx: Maklerskie, waluta PLN, 0 transakcji (brak pozycji) · pominięte (nie BUY): US500 SELL"]);
 });

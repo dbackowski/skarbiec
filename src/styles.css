@@ -7,12 +7,13 @@
   --down: #c62828;
   --accent: #2f6fde;
   --card: #ffffff;
-  /* categorical slots 1-4 (validated: adjacent CVD ΔE ≥ 8.4, light + dark) */
+  /* categorical slots 1-6 (validated: adjacent CVD ΔE ≥ 8.4, light + dark) */
   --s1: #2a78d6;
   --s2: #eb6834;
   --s3: #1baf7a;
   --s4: #eda100;
   --s5: #e87ba4;
+  --s6: #008300;
   color-scheme: light dark;
   font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
@@ -32,11 +33,14 @@
     --s3: #199e70;
     --s4: #c98500;
     --s5: #d55181;
+    --s6: #008300;
   }
 }
 
+[hidden] { display: none !important; } /* form/flex rules must not unhide hidden elements */
+
 body { margin: 0; padding: 16px 24px; background: var(--bg); color: var(--fg); }
-header { display: flex; align-items: center; gap: 24px; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; }
 h1 { margin: 0; font-size: 22px; }
 h2 { font-size: 15px; margin: 24px 0 8px; color: var(--muted); }
 #status { min-height: 1.4em; color: var(--muted); margin: 8px 0; }
@@ -44,7 +48,7 @@ h2 { font-size: 15px; margin: 24px 0 8px; color: var(--muted); }
 
 table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
-th:first-child, td:first-child, table:has(#transactions) :is(th, td):nth-child(2) { text-align: left; }
+th:first-child, td:first-child, .tx-table :is(th, td):nth-child(2) { text-align: left; }
 th { font-weight: 500; color: var(--muted); }
 .up { color: var(--up); }
 .down { color: var(--down); }
@@ -87,6 +91,7 @@ header button.secondary { padding: 5px 8px; }
 .s3 { background: var(--s3); }
 .s4 { background: var(--s4); }
 .s5 { background: var(--s5); }
+.s6 { background: var(--s6); }
 .seg.s3, .seg.s4, .seg.s5 { color: #0b0b0b; } /* light fills take near-black text */
 .legend { display: flex; flex-wrap: wrap; gap: 16px; list-style: none; padding: 0; margin: 4px 0 12px; color: var(--muted); font-size: 12px; }
 .legend li { display: flex; align-items: center; gap: 6px; }
@@ -111,3 +116,15 @@ td button.secondary { color: var(--accent); }
 .reminders { border-color: var(--s4); margin-bottom: 16px; }
 .reminders ul { margin: 0; padding-left: 18px; }
 .reminders li { margin: 4px 0; }
+
+/* Account tabs */
+.account-summary { font-size: 15px; font-weight: 600; margin: 8px 0; }
+.limit { max-width: 520px; margin: 8px 0 4px; }
+.limit-label { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+.meter { height: 8px; border-radius: 4px; background: color-mix(in srgb, var(--s1) 22%, transparent); overflow: hidden; }
+.meter-fill { height: 100%; background: var(--s1); border-radius: 4px; }
+.meter-fill.over { background: var(--down); }
+.two-col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 32px; }
+@media (max-width: 760px) { .two-col { grid-template-columns: 1fr; } }
+.two-col form { margin-top: 8px; }
+.set-limit { margin-top: 12px; }

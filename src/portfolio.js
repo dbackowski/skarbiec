@@ -1,4 +1,4 @@
-export const ACCOUNTS = { regular: "Zwykłe", ike: "IKE", ikze: "IKZE" };
+export const ACCOUNTS = { regular: "Maklerskie", ike: "IKE", ikze: "IKZE", oipe: "OIPE" };
 
 // Pure portfolio math, no I/O, so it runs in the webview and under `node --test`.
 //
@@ -43,14 +43,20 @@ export function positions(transactions) {
   return [...map.values()];
 }
 
-// XTB symbol suffix -> Yahoo suffix. Unknown suffixes (e.g. .DE) pass through unchanged.
-const XTB_TO_YAHOO = { PL: "WA", US: "", UK: "L", FR: "PA", NL: "AS", IT: "MI", ES: "MC", CH: "SW", PT: "LS", BE: "BR", DK: "CO", SE: "ST", NO: "OL", FI: "HE" };
+// Exchange suffix as shown by brokers -> Yahoo suffix. Unknown suffixes (e.g. .DE) pass through.
+const SUFFIX_TO_YAHOO = {
+  // XTB
+  PL: "WA", US: "", UK: "L", FR: "PA", NL: "AS", IT: "MI", ES: "MC", CH: "SW", PT: "LS", BE: "BR", DK: "CO",
+  SE: "ST", NO: "OL", FI: "HE",
+  // Bloomberg-style codes (Finax): GR/GY Germany -> XETRA (the .F quotes on Yahoo are stale)
+  GR: "DE", GY: "DE", LN: "L", NA: "AS", FP: "PA", IM: "MI", PW: "WA",
+};
 
 export function yahooSymbol(symbol) {
   const s = symbol.trim().toUpperCase();
   const m = s.match(/^(.+)\.([A-Z]{2})$/);
-  if (!m || !(m[2] in XTB_TO_YAHOO)) return s;
-  const suffix = XTB_TO_YAHOO[m[2]];
+  if (!m || !(m[2] in SUFFIX_TO_YAHOO)) return s;
+  const suffix = SUFFIX_TO_YAHOO[m[2]];
   return suffix ? `${m[1]}.${suffix}` : m[1];
 }
 
