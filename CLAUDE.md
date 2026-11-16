@@ -5,6 +5,8 @@ Opis funkcji, uruchamianie i struktura katalogów: README.md. Tu są tylko regu�
 ## Praca
 
 - Commity po polsku, w trybie rozkazującym („Dodaj…”, „Popraw…”), z opisem zmian w treści.
+- Wyjątek: GitHub Actions (`.github/workflows/`) po angielsku: nazwy plików, workflowów, jobów, kroków,
+  komunikaty i opis wydania.
 - Każda zmiana z testem: logika w `test/*.test.js`, interfejs w `test/e2e.test.js`. Przed commitem `npm run test:all`.
 - Nigdy nie commituj prawdziwych danych: raportów XTB, pliku `skarbiec.json`, numerów rachunków, kwot.
   Pliki XLSX w testach mają wymyślone dane i generuje je `python3 test/fixtures/make_xtb_fixtures.py`.
@@ -33,8 +35,14 @@ Opis funkcji, uruchamianie i struktura katalogów: README.md. Tu są tylko regu�
 - Obligacje ROR liczone według listu emisyjnego 104/2026 (`src/bonds.js`). Przy nowych seriach sprawdź, czy zasady
   (opłata za wykup, wzór odsetek, dzień stopy NBP) się nie zmieniły.
 
+## Wydania
+
+- Wersja jest w trzech miejscach: `src-tauri/tauri.conf.json`, `package.json`, `src-tauri/Cargo.toml`; zmieniaj
+  wszystkie naraz (lockfile'y aktualizuj przez npm/cargo). Tag `vX.Y.Z` musi być równy tej wersji, inaczej
+  workflow „Release” się zatrzyma.
+
 ## Testy interfejsu
 
 - `test/e2e.test.js`: prawdziwy `src/` w Chrome przez `playwright-core`, atrapa Tauri (`fakeTauri`) z plikiem danych
   w pamięci i stałymi kursami, zegar ustawiony na 2026-11-15 12:00 czasu warszawskiego.
-- Polski format liczb używa spacji nierozdzielającej (` `) jako separatora tysięcy.
+- Polski format liczb używa spacji nierozdzielającej (`\u00a0`) jako separatora tysięcy.

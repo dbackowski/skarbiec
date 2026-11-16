@@ -1,0 +1,62 @@
+name: Release
+
+# Builds the macOS app and creates a draft GitHub Release with the .dmg and .app.
+# Run it by pushing a tag matching the app version (git tag v1.0.0 && git push origin v1.0.0)
+# or manually from the Actions tab ("Run workflow"); the release is named after the version
+# in src-tauri/tauri.conf.json. Publish the draft on GitHub after checking it.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write # create the release and upload files
+
+jobs:
+  tests:
+    uses: ./.github/workflows/tests.yml
+
+  macos:
+    needs: tests
+    runs-on: macos-latest # Apple Silicon
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag matches the app version
+        if: github.ref_type == 'tag'
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match app version ${version} (expected v${version})"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - run: npm ci
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Build and draft release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v__VERSION__
+          releaseName: Skarbiec v__VERSION__
+          releaseDraft: true
+          releaseBody: |
+            Skarbiec v__VERSION__ for macOS (Apple Silicon).
+
+            The app is not signed with an Apple Developer account, so macOS blocks it on first launch.
+            After copying it to Applications: right-click Skarbiec.app → Open → Open,
+            or in Terminal: xattr -dr com.apple.quarantine /Applications/Skarbiec.app

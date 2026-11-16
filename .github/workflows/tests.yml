@@ -1,12 +1,13 @@
-name: Testy
+name: Tests
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_call: # reused by release.yml before building packages
 
 jobs:
-  testy:
+  tests:
     # Linux: cheapest runner; the tests do not depend on macOS (UI tests run in Chrome).
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -20,11 +21,11 @@ jobs:
 
       - run: npm ci
 
-      - name: Testy JS (jednostkowe i interfejsu w Chrome)
+      - name: JS tests (unit and UI in Chrome)
         run: npm test
 
       # Tauri needs WebKitGTK and friends to compile on Linux.
-      - name: Zależności systemowe Tauri
+      - name: Tauri system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
@@ -35,5 +36,5 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: Testy Rust
+      - name: Rust tests
         run: npm run test:rust

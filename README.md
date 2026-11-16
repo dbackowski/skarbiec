@@ -1,6 +1,6 @@
 # Skarbiec
 
-[![Testy](https://github.com/dbackowski/skarbiec/actions/workflows/testy.yml/badge.svg)](https://github.com/dbackowski/skarbiec/actions/workflows/testy.yml)
+[![Tests](https://github.com/dbackowski/skarbiec/actions/workflows/tests.yml/badge.svg)](https://github.com/dbackowski/skarbiec/actions/workflows/tests.yml)
 
 Desktopowa aplikacja do śledzenia domowego majątku: ETF-y i akcje na kontach maklerskich, IKE, IKZE i OIPE,
 obligacje skarbowe ROR i konta oszczędnościowe. Wartości są przeliczane na PLN i zebrane na jednym
@@ -95,6 +95,21 @@ ditto src-tauri/target/release/bundle/macos/Skarbiec.app /Applications/Skarbiec.
 - Build tworzy też instalator `.dmg` w `src-tauri/target/release/bundle/dmg/`, przydatny do przeniesienia
   aplikacji na inny Mac.
 
+### Gotowa paczka z GitHuba
+
+Workflow „Release” (`.github/workflows/release.yml`) buduje aplikację na macOS (Apple Silicon) i tworzy
+szkic wydania na GitHubie z plikami `.dmg` i `.app.tar.gz`. Paczka powstaje dopiero, gdy przejdą testy.
+
+1. Podnieś wersję w `src-tauri/tauri.conf.json`, `package.json` i `src-tauri/Cargo.toml`, zrób commit.
+2. Wypchnij tag z tą wersją: `git tag v1.0.0 && git push origin v1.0.0`
+   (albo uruchom workflow ręcznie w zakładce Actions; nazwa wydania bierze się z wersji aplikacji).
+   Tag niezgodny z wersją aplikacji zatrzymuje budowanie.
+3. Sprawdź szkic w zakładce Releases i opublikuj go.
+
+Aplikacja z GitHuba nie jest podpisana kontem Apple Developer, więc macOS zablokuje ją przy pierwszym
+uruchomieniu: prawy przycisk na `Skarbiec.app` → Otwórz → Otwórz, albo
+`xattr -dr com.apple.quarantine /Applications/Skarbiec.app`.
+
 ## Testy
 
 ```sh
@@ -117,8 +132,8 @@ npm run test:all       # jedno i drugie
 
 Testy interfejsu wymagają zainstalowanej przeglądarki Google Chrome.
 
-Na GitHubie testy uruchamiają się automatycznie przy każdym `push` na `main` i przy każdym pull requeście
-(`.github/workflows/testy.yml`, runner Ubuntu).
+Na GitHubie testy uruchamiają się automatycznie przy każdym `push` na `main`, przy każdym pull requeście
+i przed budowaniem wydania (`.github/workflows/tests.yml`, runner Ubuntu).
 
 ## Import z XTB
 
