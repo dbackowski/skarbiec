@@ -1,9 +1,10 @@
 name: Release
 
-# Builds the app for macOS, Windows and Linux and attaches the packages to one draft GitHub Release.
+# Builds the app for macOS, Windows and Linux into one GitHub Release, created as a draft and
+# published automatically once all three platforms succeed (on any failure it stays a draft).
 # Run it by pushing a tag matching the app version (git tag v1.0.0 && git push origin v1.0.0)
 # or manually from the Actions tab ("Run workflow"); the release is named after the version
-# in src-tauri/tauri.conf.json. Publish the draft on GitHub after checking it.
+# in src-tauri/tauri.conf.json.
 
 on:
   push:
@@ -101,3 +102,20 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
+
+  # Runs only when every platform built and uploaded successfully; otherwise the release stays
+  # a draft, so an incomplete release is never public.
+  publish-release:
+    needs: [create-release, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish the draft release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: ${{ needs.create-release.outputs.release_id }},
+              draft: false,
+            });

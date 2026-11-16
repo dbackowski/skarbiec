@@ -98,7 +98,9 @@ ditto src-tauri/target/release/bundle/macos/Skarbiec.app /Applications/Skarbiec.
 ### Gotowa paczka z GitHuba
 
 Workflow „Release” (`.github/workflows/release.yml`) buduje aplikację na trzy systemy i dołącza paczki
-do jednego szkicu wydania na GitHubie. Paczki powstają dopiero, gdy przejdą testy.
+do jednego wydania na GitHubie. Paczki powstają dopiero, gdy przejdą testy. Wydanie powstaje jako szkic
+i publikuje się samo, gdy zbudują się wszystkie trzy systemy; jeśli któryś zawiedzie, zostaje szkicem
+(do poprawienia i ręcznej publikacji albo usunięcia).
 
 | System | Paczki |
 |---|---|
@@ -110,7 +112,7 @@ do jednego szkicu wydania na GitHubie. Paczki powstają dopiero, gdy przejdą te
 2. Wypchnij tag z tą wersją: `git tag v1.0.0 && git push origin v1.0.0`
    (albo uruchom workflow ręcznie w zakładce Actions; nazwa wydania bierze się z wersji aplikacji).
    Tag niezgodny z wersją aplikacji zatrzymuje budowanie.
-3. Sprawdź szkic w zakładce Releases i opublikuj go.
+3. Po ok. 20–30 minutach wydanie jest opublikowane w zakładce Releases.
 
 Paczki nie są podpisane certyfikatem, więc przy pierwszym uruchomieniu system ostrzega:
 
