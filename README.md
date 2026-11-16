@@ -97,8 +97,14 @@ ditto src-tauri/target/release/bundle/macos/Skarbiec.app /Applications/Skarbiec.
 
 ### Gotowa paczka z GitHuba
 
-Workflow „Release” (`.github/workflows/release.yml`) buduje aplikację na macOS (Apple Silicon) i tworzy
-szkic wydania na GitHubie z plikami `.dmg` i `.app.tar.gz`. Paczka powstaje dopiero, gdy przejdą testy.
+Workflow „Release” (`.github/workflows/release.yml`) buduje aplikację na trzy systemy i dołącza paczki
+do jednego szkicu wydania na GitHubie. Paczki powstają dopiero, gdy przejdą testy.
+
+| System | Paczki |
+|---|---|
+| macOS (Apple Silicon) | `.dmg`, `.app.tar.gz` |
+| Windows | `.msi`, `.exe` (instalator NSIS) |
+| Linux | `.AppImage`, `.deb`, `.rpm` |
 
 1. Podnieś wersję w `src-tauri/tauri.conf.json`, `package.json` i `src-tauri/Cargo.toml`, zrób commit.
 2. Wypchnij tag z tą wersją: `git tag v1.0.0 && git push origin v1.0.0`
@@ -106,9 +112,12 @@ szkic wydania na GitHubie z plikami `.dmg` i `.app.tar.gz`. Paczka powstaje dopi
    Tag niezgodny z wersją aplikacji zatrzymuje budowanie.
 3. Sprawdź szkic w zakładce Releases i opublikuj go.
 
-Aplikacja z GitHuba nie jest podpisana kontem Apple Developer, więc macOS zablokuje ją przy pierwszym
-uruchomieniu: prawy przycisk na `Skarbiec.app` → Otwórz → Otwórz, albo
-`xattr -dr com.apple.quarantine /Applications/Skarbiec.app`.
+Paczki nie są podpisane certyfikatem, więc przy pierwszym uruchomieniu system ostrzega:
+
+- **macOS:** prawy przycisk na `Skarbiec.app` → Otwórz → Otwórz, albo
+  `xattr -dr com.apple.quarantine /Applications/Skarbiec.app`.
+- **Windows:** w oknie SmartScreen „Więcej informacji” → „Uruchom mimo to”.
+- **Linux:** zainstaluj `.deb` / `.rpm` albo nadaj plikowi `.AppImage` prawo wykonywania (`chmod +x`).
 
 ## Testy
 
@@ -163,11 +172,13 @@ Zasady importu:
 
 ## Dane i kopia zapasowa
 
-Wszystko jest w jednym pliku:
+Wszystko jest w jednym pliku `skarbiec.json` w katalogu danych aplikacji:
 
-```
-~/Library/Application Support/pl.local.skarbiec/skarbiec.json
-```
+| System | Katalog |
+|---|---|
+| macOS | `~/Library/Application Support/pl.local.skarbiec/` |
+| Windows | `%APPDATA%\pl.local.skarbiec\` |
+| Linux | `~/.local/share/pl.local.skarbiec/` |
 
 Zapis jest atomowy (plik tymczasowy + zmiana nazwy), więc awaria w trakcie zapisu nie uszkodzi danych.
 W tym samym pliku zapisywane są ostatnio pobrane kursy, żeby aplikacja działała bez połączenia.

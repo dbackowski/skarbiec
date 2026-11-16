@@ -39,7 +39,8 @@ Opis funkcji, uruchamianie i struktura katalogów: README.md. Tu są tylko regu�
 
 - Wersja jest w trzech miejscach: `src-tauri/tauri.conf.json`, `package.json`, `src-tauri/Cargo.toml`; zmieniaj
   wszystkie naraz (lockfile'y aktualizuj przez npm/cargo). Tag `vX.Y.Z` musi być równy tej wersji, inaczej
-  workflow „Release” się zatrzyma.
+  workflow „Release” się zatrzyma. Wydanie buduje paczki na macOS (Apple Silicon), Windows i Linux
+  (Ubuntu 22.04, żeby AppImage działał na starszych dystrybucjach).
 
 ## Testy interfejsu
 
